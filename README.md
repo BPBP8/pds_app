@@ -1,50 +1,70 @@
-# Welcome to your Expo app 👋
+# 怎么拍 - 摄影爱好者社区 APP
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+**拍什么？怎么拍？用什么拍？**
 
-## Get started
+一款帮助摄影爱好者解决拍摄灵感、拍摄方法、器材选择问题的社区应用。
 
-1. Install dependencies
+## 功能特点
 
-   ```bash
-   npm install
-   ```
+### 灵感池
+- 浏览精选摄影作品
+- 按动机/情绪/方法筛选
+- 拍照教程入口
 
-2. Start the app
+### 拍照教程
+- 图文教程内容
+- 分类：构图技巧、参数指南、光影运用、后期思路
+- 难度分级：入门/进阶/高级
 
-   ```bash
-   npx expo start
-   ```
+### 器材库
+- 相机/手机器材展示
+- 参数规格、用户评价、精选样张
+- 品牌和价格筛选
 
-In the output, you'll find options to open the app in a
+### 选购问答
+- 器材选购提问
+- 社区用户解答
+- 最佳答案采纳
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+### 附近机位
+- 地图展示拍照机位
+- AI 智能推荐（根据时间/题材/难度）
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+## 技术栈
 
-## Get a fresh project
+- **框架**: React Native + Expo
+- **路由**: expo-router (文件路由)
+- **后端**: Firebase (Auth + Firestore + Storage)
+- **地图**: react-native-maps + expo-location
 
-When you're ready, run:
+## 开始开发
 
 ```bash
-npm run reset-project
+# 安装依赖
+npm install
+
+# 启动开发服务器
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## 项目结构
 
-## Learn more
+```
+app/                    # 页面文件 (expo-router)
+├── (tabs)/            # 底部 Tab 页面
+│   ├── inspire.tsx   # 灵感池
+│   ├── guides.tsx    # 器材库 + 选购问答
+│   ├── locations.tsx # 机位地图 + AI推荐
+│   └── profile.tsx   # 个人中心
+├── tutorial/         # 教程详情
+├── question/         # 问答详情
+├── modal.tsx         # 发布作品
+└── ask-question.tsx  # 发布问答
 
-To learn more about developing your project with Expo, look at the following resources:
+components/           # React 组件
+src/config/          # Firebase 配置
+```
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+## 后续更新
 
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+后续更改可以直接让我帮忙推送到 GitHub 覆盖旧版本，或者你自己在本地修改后推送。

@@ -1,10 +1,10 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { Platform, View, StyleSheet } from 'react-native';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { SavedShotsProvider } from '@/src/saved-shots-context';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -12,13 +12,15 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const content = (
-    <ThemeProvider value={DarkTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
-      <StatusBar style="light" />
-    </ThemeProvider>
+    <SavedShotsProvider>
+      <ThemeProvider value={DarkTheme}>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+        </Stack>
+        <StatusBar style="light" />
+      </ThemeProvider>
+    </SavedShotsProvider>
   );
 
   if (Platform.OS === 'web') {

@@ -26,11 +26,19 @@ const MAPPING = {
   'camera.fill': 'photo-camera',
   'square.grid.2x2.fill': 'grid-view',
   'heart.fill': 'favorite',
+  'heart': 'favorite-border',
   'bookmark.fill': 'bookmark',
+  'bookmark': 'bookmark-border',
   'magnifyingglass': 'search',
   'chevron.left': 'chevron-left',
+  'chevron.up': 'keyboard-arrow-up',
+  'chevron.down': 'keyboard-arrow-down',
   'plus': 'add',
+  'xmark': 'close',
   'location.fill': 'location-on',
+  'clock.fill': 'schedule',
+  'square.and.arrow.up': 'share',
+  'square.fill.on.square.fill': 'collections',
 } as IconMapping;
 
 /**

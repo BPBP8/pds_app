@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, FlatList, Image, Dimensions, ActivityIndicator, TouchableOpacity, ScrollView } from 'react-native';
+import { StyleSheet, View, Text, FlatList, Image, ActivityIndicator, TouchableOpacity, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../../src/config/firebase';
@@ -100,7 +100,7 @@ export default function TutorialsScreen() {
                 if (!isMounted) return;
                 const data: Tutorial[] = [];
                 querySnapshot.forEach((doc) => {
-                    data.push({ id: doc.id, ...doc.data() });
+                    data.push({ id: doc.id, ...(doc.data() as Omit<Tutorial, 'id'>) });
                 });
                 setTutorials(data.length > 0 ? data : MOCK_TUTORIALS);
                 setLoading(false);
@@ -114,7 +114,7 @@ export default function TutorialsScreen() {
                 isMounted = false;
                 unsubscribe();
             };
-        } catch (e) {
+        } catch {
             if (isMounted) {
                 setTutorials(MOCK_TUTORIALS);
                 setLoading(false);

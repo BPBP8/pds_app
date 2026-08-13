@@ -97,7 +97,7 @@ export default function QuestionsScreen() {
                 if (!isMounted) return;
                 const data: Question[] = [];
                 querySnapshot.forEach((doc) => {
-                    data.push({ id: doc.id, ...doc.data() });
+                    data.push({ id: doc.id, ...(doc.data() as Omit<Question, 'id'>) });
                 });
                 setQuestions(data.length > 0 ? data : MOCK_QUESTIONS);
                 setLoading(false);
@@ -111,7 +111,7 @@ export default function QuestionsScreen() {
                 isMounted = false;
                 unsubscribe();
             };
-        } catch (e) {
+        } catch {
             if (isMounted) {
                 setQuestions(MOCK_QUESTIONS);
                 setLoading(false);

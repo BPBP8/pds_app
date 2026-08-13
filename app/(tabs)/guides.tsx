@@ -163,7 +163,7 @@ export default function GuidesScreen() {
             {currentData.reviews.map((r: any, i: number) => (
               <View key={i} style={styles.reviewCard}>
                 <Text style={styles.reviewUser}>@{r.user}</Text>
-                <Text style={styles.reviewText}>"{r.text}"</Text>
+                <Text style={styles.reviewText}>“{r.text}”</Text>
                 <Text style={styles.rating}>{'⭐'.repeat(r.rating)}</Text>
               </View>
             ))}

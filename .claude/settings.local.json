@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(rm -rf dist/)",
-      "Bash(rm -rf src/screens/ src/navigation/ src/theme/)",
-      "Bash(npm start:*)"
-    ]
-  }
-}

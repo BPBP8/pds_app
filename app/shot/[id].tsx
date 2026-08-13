@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Image,
   Linking,
@@ -13,6 +13,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useAppPreferences } from '@/src/app-preferences-context';
+import { formatDistance } from '@/src/distance';
+import { useOnboardingTour, useTourTarget } from '@/src/onboarding-tour-context';
 import { useSavedShots } from '@/src/saved-shots-context';
 import { SEED_POST_BY_ID } from '../../src/data/seed-posts';
 
@@ -21,14 +24,29 @@ export default function ShotDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
+  const { coordinates, device } = useAppPreferences();
+  const {
+    active: tourActive,
+    postId: tourPostId,
+    stepIndex,
+    temporarySaved,
+  } = useOnboardingTour();
+  const methodTourTarget = useTourTarget('shot-method');
+  const saveTourTarget = useTourTarget('shot-save');
   const [saving, setSaving] = useState(false);
+  const [methodSectionY, setMethodSectionY] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
   const { hydrated, isSaved, toggle } = useSavedShots();
   const postId = Array.isArray(id) ? id[0] : id;
   const post = postId ? SEED_POST_BY_ID[postId] : undefined;
   const saved = postId ? isSaved(postId) : false;
+  const displaySaved =
+    tourActive && tourPostId === postId && temporarySaved ? true : saved;
+  const distance = post ? formatDistance(coordinates, post.location.coordinates) : undefined;
+  const heroHeight = Math.min(screenWidth * 0.9, 410);
 
   const toggleSaved = async () => {
-    if (!post || !hydrated || saving) return;
+    if (!post || !hydrated || saving || tourActive) return;
     setSaving(true);
     try {
       await toggle(post.id);
@@ -36,6 +54,20 @@ export default function ShotDetailScreen() {
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    if (!tourActive || stepIndex !== 2 || tourPostId !== postId || methodSectionY <= 0) {
+      return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({
+        y: Math.max(heroHeight + methodSectionY - 170, 0),
+        animated: false,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [heroHeight, methodSectionY, postId, stepIndex, tourActive, tourPostId]);
 
   if (!post) {
     return (
@@ -54,13 +86,14 @@ export default function ShotDetailScreen() {
       <Stack.Screen options={{ headerShown: false }} />
 
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 140 + insets.bottom }}
       >
         <View>
           <Image
             source={post.image.source}
-            style={[styles.hero, { height: Math.min(screenWidth * 1.1, 460) }]}
+            style={[styles.hero, { height: heroHeight }]}
             resizeMode="cover"
             accessibilityLabel={post.image.alt}
           />
@@ -82,6 +115,25 @@ export default function ShotDetailScreen() {
 
           <Text style={styles.title}>{post.title}</Text>
           <Text style={styles.hook}>{post.hook}</Text>
+
+          <View style={styles.signatureBar}>
+            <View style={styles.signatureItem}>
+              <IconSymbol name="location.fill" size={15} color="#D85331" />
+              <Text style={styles.signatureText}>{distance ? `距你 ${distance}` : post.location.shortLabel}</Text>
+            </View>
+            <View style={styles.signatureDivider} />
+            <View style={styles.signatureItem}>
+              <IconSymbol name="clock.fill" size={15} color="#D85331" />
+              <Text numberOfLines={1} style={styles.signatureText}>{post.time.shootingWindow}</Text>
+            </View>
+            <View style={styles.signatureDivider} />
+            <View style={styles.signatureItem}>
+              <IconSymbol name="iphone" size={15} color="#D85331" />
+              <Text style={styles.signatureText}>
+                {post.deviceKinds.includes(device.kind) ? `${device.shortName}可拍` : '方法可参考'}
+              </Text>
+            </View>
+          </View>
 
           <View style={styles.quickGrid}>
             <InfoCard label="地点" value={post.location.label} note={post.location.sourceLabel} />
@@ -135,7 +187,15 @@ export default function ShotDetailScreen() {
             </View>
           </View>
 
-          <View style={styles.section}>
+          <View
+            ref={methodTourTarget.ref}
+            collapsable={methodTourTarget.collapsable}
+            style={styles.section}
+            onLayout={(event) => {
+              setMethodSectionY(event.nativeEvent.layout.y);
+              methodTourTarget.onLayout(event);
+            }}
+          >
             <Text style={styles.sectionEyebrow}>怎么拍</Text>
             <Text style={styles.sectionTitle}>照着这 {post.recreation.steps.length} 步做</Text>
             <View style={styles.steps}>
@@ -149,6 +209,26 @@ export default function ShotDetailScreen() {
               ))}
             </View>
           </View>
+
+          {post.accessNote ? (
+            <View style={styles.accessPanel}>
+              <View style={styles.accessIcon}>
+                <IconSymbol name="location.circle.fill" size={20} color="#D85331" />
+              </View>
+              <View style={styles.accessCopy}>
+                <Text style={styles.accessTitle}>到现场前看一眼</Text>
+                <Text style={styles.accessText}>{post.accessNote}</Text>
+              </View>
+            </View>
+          ) : null}
+
+          <TouchableOpacity style={styles.questionButton} onPress={() => router.push('/ask-question')}>
+            <View>
+              <Text style={styles.questionEyebrow}>还有具体问题？</Text>
+              <Text style={styles.questionTitle}>去公开问答里问拍法</Text>
+            </View>
+            <IconSymbol name="chevron.right" size={20} color="#FFFFFF" />
+          </TouchableOpacity>
 
           <View style={styles.creditPanel}>
             <Text style={styles.sectionEyebrow}>图片来源与许可</Text>
@@ -180,21 +260,27 @@ export default function ShotDetailScreen() {
 
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 14) }]}>
         <TouchableOpacity
+          ref={saveTourTarget.ref}
+          onLayout={saveTourTarget.onLayout}
           style={[
             styles.saveButton,
-            saved && styles.saveButtonSaved,
+            displaySaved && styles.saveButtonSaved,
             (!hydrated || saving) && styles.saveButtonDisabled,
           ]}
           onPress={() => void toggleSaved()}
-          disabled={!hydrated || saving}
+          disabled={!hydrated || saving || tourActive}
         >
           <IconSymbol
-            name={saved ? 'bookmark.fill' : 'bookmark'}
+            name={displaySaved ? 'bookmark.fill' : 'bookmark'}
             size={20}
-            color={saved ? '#FF5A3C' : '#FFFFFF'}
+            color={displaySaved ? '#FF5A3C' : '#FFFFFF'}
           />
-          <Text style={[styles.saveButtonText, saved && styles.saveButtonTextSaved]}>
-            {!hydrated ? '正在读取想拍清单' : saved ? '已加入想拍清单' : '加入想拍清单'}
+          <Text style={[styles.saveButtonText, displaySaved && styles.saveButtonTextSaved]}>
+            {!hydrated
+              ? '正在读取想拍清单'
+              : displaySaved
+                ? '已加入想拍清单'
+                : '加入想拍清单'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -253,6 +339,20 @@ const styles = StyleSheet.create({
   creditName: { color: '#222224', fontSize: 14, fontWeight: '800', marginTop: 2 },
   title: { color: '#18181A', fontSize: 29, lineHeight: 35, fontWeight: '900', letterSpacing: -0.8 },
   hook: { color: '#626267', fontSize: 16, lineHeight: 25, marginTop: 10 },
+  signatureBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 16,
+    backgroundColor: '#FFF0E9',
+    borderWidth: 1,
+    borderColor: '#F2D1C3',
+  },
+  signatureItem: { flex: 1, minWidth: 0, alignItems: 'center', gap: 4 },
+  signatureDivider: { width: 1, height: 27, backgroundColor: '#E8C8BB' },
+  signatureText: { color: '#7D5549', fontSize: 9, fontWeight: '900', textAlign: 'center' },
   quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 24 },
   infoCard: {
     width: '48%',
@@ -306,6 +406,37 @@ const styles = StyleSheet.create({
   },
   stepNumberText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
   stepText: { flex: 1, color: '#3C3C40', fontSize: 15, lineHeight: 23, marginLeft: 12 },
+  accessPanel: {
+    flexDirection: 'row',
+    marginTop: 28,
+    padding: 16,
+    borderRadius: 18,
+    backgroundColor: '#FFF5EF',
+    borderWidth: 1,
+    borderColor: '#F2DDD3',
+  },
+  accessIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFE4D8',
+  },
+  accessCopy: { flex: 1, marginLeft: 11 },
+  accessTitle: { color: '#4C3B36', fontSize: 12, fontWeight: '900' },
+  accessText: { color: '#81736E', fontSize: 11, lineHeight: 18, marginTop: 4 },
+  questionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    padding: 17,
+    borderRadius: 18,
+    backgroundColor: '#252527',
+  },
+  questionEyebrow: { color: '#F3A98C', fontSize: 9, fontWeight: '900' },
+  questionTitle: { color: '#FFFFFF', fontSize: 14, fontWeight: '900', marginTop: 4 },
   creditPanel: { marginTop: 30, padding: 18, borderRadius: 18, backgroundColor: '#F5F5F3' },
   creditPanelTitle: { color: '#232325', fontSize: 15, fontWeight: '800' },
   creditPanelText: { color: '#76767B', fontSize: 12, lineHeight: 19, marginTop: 8 },

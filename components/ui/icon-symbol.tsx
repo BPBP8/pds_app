@@ -39,6 +39,14 @@ const MAPPING = {
   'clock.fill': 'schedule',
   'square.and.arrow.up': 'share',
   'square.fill.on.square.fill': 'collections',
+  'map.fill': 'map',
+  'lightbulb.fill': 'lightbulb',
+  'checkmark.circle.fill': 'check-circle',
+  'iphone': 'smartphone',
+  'scope': 'my-location',
+  'questionmark.circle.fill': 'help',
+  'location.circle.fill': 'near-me',
+  'gearshape.fill': 'settings',
 } as IconMapping;
 
 /**

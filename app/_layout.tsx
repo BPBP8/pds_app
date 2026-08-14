@@ -5,6 +5,7 @@ import 'react-native-reanimated';
 import { Platform, View, StyleSheet } from 'react-native';
 
 import { SavedShotsProvider } from '@/src/saved-shots-context';
+import { AuthProvider } from '@/src/auth-context';
 import { AppPreferencesProvider } from '@/src/app-preferences-context';
 import { OnboardingTourProvider } from '@/src/onboarding-tour-context';
 import { OnboardingTourOverlay } from '@/components/onboarding-tour-overlay';
@@ -15,22 +16,25 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const content = (
-    <AppPreferencesProvider>
-      <SavedShotsProvider>
-        <OnboardingTourProvider>
-          <ThemeProvider value={DefaultTheme}>
-            <View style={styles.appRoot}>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
-              </Stack>
-              <StatusBar style="dark" />
-              <OnboardingTourOverlay />
-            </View>
-          </ThemeProvider>
-        </OnboardingTourProvider>
-      </SavedShotsProvider>
-    </AppPreferencesProvider>
+    <AuthProvider>
+      <AppPreferencesProvider>
+        <SavedShotsProvider>
+          <OnboardingTourProvider>
+            <ThemeProvider value={DefaultTheme}>
+              <View style={styles.appRoot}>
+                <Stack>
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
+                  <Stack.Screen name="auth" options={{ presentation: 'modal', headerShown: false }} />
+                </Stack>
+                <StatusBar style="dark" />
+                <OnboardingTourOverlay />
+              </View>
+            </ThemeProvider>
+          </OnboardingTourProvider>
+        </SavedShotsProvider>
+      </AppPreferencesProvider>
+    </AuthProvider>
   );
 
   if (Platform.OS === 'web') {

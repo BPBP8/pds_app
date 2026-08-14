@@ -1,0 +1,181 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    match /posts/{postId} {
+      allow read: if true;
+
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'title', 'imageUrl', 'category', 'motivation', 'notes', 'device',
+          'capturedAt', 'params', 'location', 'userId', 'authorName', 'likes', 'createdAt'
+        ])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 40
+        && request.resource.data.imageUrl is string
+        && request.resource.data.imageUrl.matches('^data:image/jpeg;base64,.*')
+        && request.resource.data.imageUrl.size() <= 800000
+        && request.resource.data.category in ['旅行', '人像', '美食', '宠物', '生活']
+        && request.resource.data.motivation == request.resource.data.category
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 500
+        && request.resource.data.device is string
+        && request.resource.data.device.size() > 0
+        && request.resource.data.device.size() <= 100
+        && (request.resource.data.capturedAt == null
+          || (request.resource.data.capturedAt is string
+            && request.resource.data.capturedAt.size() <= 50))
+        && request.resource.data.params is map
+        && request.resource.data.params.keys().hasOnly(['lens', 'focalLength', 'aperture', 'shutter', 'iso'])
+        && (!('lens' in request.resource.data.params)
+          || (request.resource.data.params.lens is string
+            && request.resource.data.params.lens.size() <= 100))
+        && (!('focalLength' in request.resource.data.params)
+          || (request.resource.data.params.focalLength is string
+            && request.resource.data.params.focalLength.size() <= 100))
+        && (!('aperture' in request.resource.data.params)
+          || (request.resource.data.params.aperture is string
+            && request.resource.data.params.aperture.size() <= 100))
+        && (!('shutter' in request.resource.data.params)
+          || (request.resource.data.params.shutter is string
+            && request.resource.data.params.shutter.size() <= 100))
+        && (!('iso' in request.resource.data.params)
+          || (request.resource.data.params.iso is string
+            && request.resource.data.params.iso.size() <= 100))
+        && (request.resource.data.location == null
+          || (request.resource.data.location is map
+            && request.resource.data.location.keys().hasOnly(['label', 'precise'])
+            && request.resource.data.location.label is string
+            && request.resource.data.location.label.size() <= 100
+            && request.resource.data.location.precise is bool))
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() <= 40
+        && request.resource.data.likes == 0
+        && request.resource.data.createdAt == request.time;
+
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+
+      allow update: if signedIn()
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes'])
+        && request.resource.data.likes is int
+        && request.resource.data.likes == resource.data.likes + 1
+        && !exists(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(request.auth.uid));
+
+      match /likes/{userId} {
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow create: if signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly(['userId', 'createdAt'])
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && exists(/databases/$(database)/documents/posts/$(postId))
+          && getAfter(/databases/$(database)/documents/posts/$(postId)).data.likes
+            == get(/databases/$(database)/documents/posts/$(postId)).data.likes + 1;
+        allow update, delete: if false;
+      }
+    }
+
+    match /users/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create, update, delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/savedShots/{savedShotId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll(['postId', 'kind', 'savedAt'])
+        && request.resource.data.keys().hasOnly(['postId', 'kind', 'savedAt'])
+        && request.resource.data.postId is string
+        && request.resource.data.postId.size() > 0
+        && request.resource.data.postId.size() <= 128
+        && request.resource.data.kind in ['seed', 'remote']
+        && savedShotId == request.resource.data.kind + ':' + request.resource.data.postId
+        && request.resource.data.savedAt == request.time
+        && (request.resource.data.kind == 'seed'
+          || exists(/databases/$(database)/documents/posts/$(request.resource.data.postId)));
+      allow update: if false;
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /questions/{questionId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.keys().hasOnly([
+          'title', 'description', 'budget', 'useCase', 'authorId', 'authorName',
+          'answersCount', 'upvotes', 'isResolved', 'tags', 'createdAt'
+        ])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 100
+        && request.resource.data.description is string
+        && request.resource.data.description.size() > 0
+        && request.resource.data.description.size() <= 1200
+        && (request.resource.data.budget == null
+          || (request.resource.data.budget is string
+            && request.resource.data.budget.size() <= 40))
+        && (request.resource.data.useCase == null
+          || (request.resource.data.useCase is string
+            && request.resource.data.useCase.size() <= 40))
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() <= 40
+        && request.resource.data.answersCount == 0
+        && request.resource.data.upvotes == 0
+        && request.resource.data.isResolved == false
+        && request.resource.data.tags is list
+        && request.resource.data.tags.size() <= 2
+        && request.resource.data.createdAt == request.time;
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answersCount', 'lastAnswerId'])
+        && request.resource.data.answersCount == resource.data.answersCount + 1
+        && request.resource.data.lastAnswerId is string
+        && !exists(/databases/$(database)/documents/questions/$(questionId)/answers/$(request.resource.data.lastAnswerId))
+        && existsAfter(/databases/$(database)/documents/questions/$(questionId)/answers/$(request.resource.data.lastAnswerId))
+        && getAfter(/databases/$(database)/documents/questions/$(questionId)/answers/$(request.resource.data.lastAnswerId)).data.authorId
+          == request.auth.uid;
+      allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+
+      match /answers/{answerId} {
+        allow read: if true;
+        allow create: if signedIn()
+          && request.resource.data.authorId == request.auth.uid
+          && request.resource.data.keys().hasOnly([
+            'questionId', 'answerText', 'authorId', 'authorName', 'authorAvatar',
+            'createdAt', 'upvotes', 'isAccepted'
+          ])
+          && request.resource.data.questionId == questionId
+          && request.resource.data.answerText is string
+          && request.resource.data.answerText.size() > 0
+          && request.resource.data.answerText.size() <= 2000
+          && request.resource.data.authorName is string
+          && request.resource.data.authorName.size() > 0
+          && request.resource.data.authorName.size() <= 40
+          && request.resource.data.authorAvatar == ''
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.upvotes == 0
+          && request.resource.data.isAccepted == false
+          && exists(/databases/$(database)/documents/questions/$(questionId))
+          && getAfter(/databases/$(database)/documents/questions/$(questionId)).data.answersCount
+            == get(/databases/$(database)/documents/questions/$(questionId)).data.answersCount + 1
+          && getAfter(/databases/$(database)/documents/questions/$(questionId)).data.lastAnswerId == answerId;
+        allow update: if false;
+        allow delete: if signedIn() && resource.data.authorId == request.auth.uid;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

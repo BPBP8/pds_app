@@ -6,11 +6,13 @@
 
 - 按题材浏览北京拍摄灵感与附近作品
 - 查看作品的地点、时间、设备、参数和复刻步骤
-- 点赞、加入“想拍”清单并在个人页找回
-- 单图作品发布与公开拍摄问答
+- 登录后点赞、加入“想拍”清单并跨设备找回
+- 邮箱注册、登录、退出和密码重置
+- 单图作品发布，自动读取照片中的设备、时间与参数
+- 登录后发布器材问题和回答，内容同步到 Firestore
 - 手机、相机、运动相机和无人机等设备推荐入口
 - 可跨页面前进、后退和退出恢复的新手教程
-- 邮箱账号登录相关页面与 Firebase 数据接入
+- Firebase Authentication / Firestore 数据接入与安全规则
 
 ## 本地预览
 
@@ -28,6 +30,17 @@ npm run preview
 ```bash
 npm run check
 ```
+
+## Firebase 后端
+
+项目使用 Firebase 邮箱密码认证和 Cloud Firestore。首次部署前，需要在 Firebase 控制台创建默认 Firestore 数据库；本项目面向北京用户，建议选择香港区域 `asia-east2`。随后执行：
+
+```bash
+npx --yes firebase-tools@15.27.0 login
+npm run firebase:deploy
+```
+
+当前原型会先把单图压缩后存入 Firestore 文档，以避开未开通付费 Storage 时的上传阻塞，适合小规模演示。正式运营前应迁移为对象存储 + 缩略图/CDN。
 
 ## 手机安装包
 
@@ -57,7 +70,7 @@ iPhone 真机安装需要 Apple Developer Program 账号，并需要先把测试
 
 - React Native 0.81 + Expo SDK 54
 - expo-router
-- Firebase Auth / Firestore / Storage
+- Firebase Authentication / Cloud Firestore
 - expo-location / expo-image-picker
 
 Android 包名与 iOS Bundle ID 均为 `com.bpbp8.pdsapp`。

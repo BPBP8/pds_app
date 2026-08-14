@@ -2,12 +2,17 @@ import React, { useState } from 'react';
 import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+
+import { getSafeAuthorName, useAuth } from '@/src/auth-context';
+import { db } from '@/src/config/firebase';
 
 const BUDGET_OPTIONS = ['5千以内', '5千-1万', '1万-2万', '2万以上', '不限预算'];
 const USE_CASE_OPTIONS = ['人像摄影', '风光摄影', '街头摄影', '建筑摄影', '纪实摄影', '视频拍摄', '综合使用'];
 
 export default function AskQuestionScreen() {
     const router = useRouter();
+    const { user } = useAuth();
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
     const [budget, setBudget] = useState('');
@@ -15,6 +20,10 @@ export default function AskQuestionScreen() {
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async () => {
+        if (!user) {
+            router.replace({ pathname: '/auth' as never, params: { returnTo: '/ask-question' } });
+            return;
+        }
         if (!title.trim()) {
             Alert.alert('提示', '请输入问题标题');
             return;
@@ -26,13 +35,31 @@ export default function AskQuestionScreen() {
 
         setIsSubmitting(true);
 
-        // In real app, this would save to Firestore
-        setTimeout(() => {
+        try {
+            const questionRef = await addDoc(collection(db, 'questions'), {
+                title: title.trim(),
+                description: description.trim(),
+                budget: budget || null,
+                useCase: useCase || null,
+                authorId: user.uid,
+                authorName: getSafeAuthorName(user.displayName),
+                answersCount: 0,
+                upvotes: 0,
+                isResolved: false,
+                tags: [useCase, budget].filter(Boolean),
+                createdAt: serverTimestamp(),
+            });
             setIsSubmitting(false);
             Alert.alert('成功', '问题已发布', [
-                { text: '确定', onPress: () => router.back() }
+                {
+                    text: '查看问题',
+                    onPress: () => router.replace({ pathname: '/question/[id]', params: { id: questionRef.id } }),
+                },
             ]);
-        }, 1000);
+        } catch {
+            setIsSubmitting(false);
+            Alert.alert('发布失败', '请检查网络后重试。');
+        }
     };
 
     return (
@@ -62,6 +89,7 @@ export default function AskQuestionScreen() {
                         placeholder="例如：预算1万5，想入手一台拍人像为主的相机，有什么推荐？"
                         placeholderTextColor="#A0A0A5"
                         multiline
+                        maxLength={100}
                         value={title}
                         onChangeText={setTitle}
                     />
@@ -76,6 +104,7 @@ export default function AskQuestionScreen() {
                         placeholderTextColor="#A0A0A5"
                         multiline
                         numberOfLines={6}
+                        maxLength={1200}
                         value={description}
                         onChangeText={setDescription}
                     />

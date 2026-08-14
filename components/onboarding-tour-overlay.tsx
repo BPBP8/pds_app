@@ -32,6 +32,7 @@ const TARGET_GAP = 12;
 const CARD_MAX_WIDTH = 340;
 const DEFAULT_CARD_HEIGHT = 190;
 const MAX_MEASURE_ATTEMPTS = 18;
+const MEASURE_TIMEOUT_MS = 220;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), Math.max(min, max));
@@ -39,25 +40,38 @@ function clamp(value: number, min: number, max: number) {
 
 function measureInWindow(node: View): Promise<Rect | null> {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (rect: Rect | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(rect);
+    };
+    const timeout = setTimeout(() => finish(null), MEASURE_TIMEOUT_MS);
+
     if (typeof node.measureInWindow !== 'function') {
-      resolve(null);
+      finish(null);
       return;
     }
 
-    node.measureInWindow((x, y, width, height) => {
-      if (
-        !Number.isFinite(x) ||
-        !Number.isFinite(y) ||
-        !Number.isFinite(width) ||
-        !Number.isFinite(height) ||
-        width <= 0 ||
-        height <= 0
-      ) {
-        resolve(null);
-        return;
-      }
-      resolve({ x, y, width, height });
-    });
+    try {
+      node.measureInWindow((x, y, width, height) => {
+        if (
+          !Number.isFinite(x) ||
+          !Number.isFinite(y) ||
+          !Number.isFinite(width) ||
+          !Number.isFinite(height) ||
+          width <= 0 ||
+          height <= 0
+        ) {
+          finish(null);
+          return;
+        }
+        finish({ x, y, width, height });
+      });
+    } catch {
+      finish(null);
+    }
   });
 }
 
@@ -83,6 +97,8 @@ export function OnboardingTourOverlay() {
   const fade = useRef(new Animated.Value(0)).current;
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const measureRunRef = useRef(0);
+  const measuredStepIdRef = useRef<string | null>(null);
+  const measurementFailedRef = useRef(false);
 
   const [overlayRect, setOverlayRect] = useState<Rect>({
     x: 0,
@@ -94,6 +110,8 @@ export function OnboardingTourOverlay() {
   overlayRectRef.current = overlayRect;
   const [targetRect, setTargetRect] = useState<Rect | null>(null);
   const [cardHeight, setCardHeight] = useState(DEFAULT_CARD_HEIGHT);
+  const [measurementFailed, setMeasurementFailed] = useState(false);
+  const [manualRetryKey, setManualRetryKey] = useState(0);
 
   const clearRetry = useCallback(() => {
     if (retryTimerRef.current) {
@@ -106,6 +124,9 @@ export function OnboardingTourOverlay() {
     if (!active) {
       clearRetry();
       setTargetRect(null);
+      measurementFailedRef.current = false;
+      measuredStepIdRef.current = null;
+      setMeasurementFailed(false);
       fade.setValue(0);
       return;
     }
@@ -119,7 +140,28 @@ export function OnboardingTourOverlay() {
     clearRetry();
     setTargetRect(null);
     fade.stopAnimation();
-    fade.setValue(0);
+    const stepChanged = measuredStepIdRef.current !== currentStep.id;
+    measuredStepIdRef.current = currentStep.id;
+    if (stepChanged) {
+      measurementFailedRef.current = false;
+      setMeasurementFailed(false);
+      fade.setValue(0);
+    } else if (measurementFailedRef.current) {
+      // Keep the fallback card visible while a manual/automatic retry runs.
+      fade.setValue(1);
+    } else {
+      fade.setValue(0);
+    }
+
+    const revealMeasurementFallback = () => {
+      if (cancelled || runId !== measureRunRef.current) return;
+      clearRetry();
+      measurementFailedRef.current = true;
+      setMeasurementFailed(true);
+      setTargetRect(null);
+      fade.stopAnimation();
+      fade.setValue(1);
+    };
 
     const tryMeasure = async (attempt: number) => {
       if (cancelled || runId !== measureRunRef.current) {
@@ -148,8 +190,9 @@ export function OnboardingTourOverlay() {
             }
 
             const overlayNode = overlayRef.current;
-            const latestTarget = getTarget(currentStep.targetId)?.node;
-            if (!overlayNode || !latestTarget) {
+            const latestRegistration = getTarget(currentStep.targetId);
+            const latestTarget = latestRegistration?.node;
+            if (!overlayNode || !latestRegistration || !latestTarget) {
               scheduleRetry(attempt);
               return;
             }
@@ -159,7 +202,14 @@ export function OnboardingTourOverlay() {
               measureInWindow(latestTarget),
             ]);
 
-            if (!measuredTarget || cancelled || runId !== measureRunRef.current) {
+            const currentRegistration = getTarget(currentStep.targetId);
+            if (
+              !measuredTarget
+              || cancelled
+              || runId !== measureRunRef.current
+              || currentRegistration?.token !== latestRegistration.token
+              || currentRegistration.node !== latestTarget
+            ) {
               scheduleRetry(attempt);
               return;
             }
@@ -184,6 +234,8 @@ export function OnboardingTourOverlay() {
             }
 
             setOverlayRect(container);
+            measurementFailedRef.current = false;
+            setMeasurementFailed(false);
             setTargetRect({
               x,
               y,
@@ -202,7 +254,11 @@ export function OnboardingTourOverlay() {
     };
 
     const scheduleRetry = (attempt: number) => {
-      if (cancelled || attempt >= MAX_MEASURE_ATTEMPTS) {
+      if (cancelled) {
+        return;
+      }
+      if (attempt >= MAX_MEASURE_ATTEMPTS) {
+        revealMeasurementFallback();
         return;
       }
       retryTimerRef.current = setTimeout(() => {
@@ -230,12 +286,24 @@ export function OnboardingTourOverlay() {
     currentStep,
     fade,
     getTarget,
+    manualRetryKey,
     overlayRect.height,
     overlayRect.width,
     targetVersion,
     window.height,
     window.width,
   ]);
+
+  const retryMeasurement = useCallback(() => {
+    clearRetry();
+    measureRunRef.current += 1;
+    measurementFailedRef.current = true;
+    setMeasurementFailed(true);
+    setTargetRect(null);
+    fade.stopAnimation();
+    fade.setValue(1);
+    setManualRetryKey((key) => key + 1);
+  }, [clearRetry, fade]);
 
   useEffect(() => {
     if (!active) {
@@ -431,8 +499,14 @@ export function OnboardingTourOverlay() {
               <Text style={styles.eyebrow}>新手教程</Text>
               <Text style={styles.progress}>{stepIndex + 1}/5</Text>
             </View>
-            <Text style={styles.title}>{currentStep.title}</Text>
-            <Text style={styles.description}>{currentStep.description}</Text>
+            <Text style={styles.title}>
+              {measurementFailed ? '暂时没找到操作区域' : currentStep.title}
+            </Text>
+            <Text style={styles.description}>
+              {measurementFailed
+                ? `“${currentStep.title}”可能还在加载。你可以重试、返回上一步或退出教程。`
+                : currentStep.description}
+            </Text>
 
             <View style={styles.actions}>
               <Pressable
@@ -455,19 +529,32 @@ export function OnboardingTourOverlay() {
                     <Text style={styles.secondaryButtonText}>上一步</Text>
                   </Pressable>
                 ) : null}
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={transitioning || !hole}
-                  onPress={next}
-                  style={({ pressed }) => [
-                    styles.primaryButton,
-                    (transitioning || !hole) && styles.primaryButtonDisabled,
-                    pressed && !transitioning && hole && styles.primaryButtonPressed,
-                  ]}>
-                  <Text style={styles.primaryButtonText}>
-                    {stepIndex === 4 ? '完成' : '下一步'}
-                  </Text>
-                </Pressable>
+                {measurementFailed ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="重新定位教程操作区域"
+                    onPress={retryMeasurement}
+                    style={({ pressed }) => [
+                      styles.primaryButton,
+                      pressed && styles.primaryButtonPressed,
+                    ]}>
+                    <Text style={styles.primaryButtonText}>重试</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={transitioning || !hole}
+                    onPress={next}
+                    style={({ pressed }) => [
+                      styles.primaryButton,
+                      (transitioning || !hole) && styles.primaryButtonDisabled,
+                      pressed && !transitioning && hole && styles.primaryButtonPressed,
+                    ]}>
+                    <Text style={styles.primaryButtonText}>
+                      {stepIndex === 4 ? '完成' : '下一步'}
+                    </Text>
+                  </Pressable>
+                )}
               </View>
             </View>
           </View>

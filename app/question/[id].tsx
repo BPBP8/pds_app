@@ -1,9 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, ScrollView, Image, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, Text, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import {
+    collection,
+    doc,
+    getDoc,
+    increment,
+    onSnapshot,
+    orderBy,
+    query,
+    runTransaction,
+    serverTimestamp,
+} from 'firebase/firestore';
 import { db } from '../../src/config/firebase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getSafeAuthorName, useAuth } from '@/src/auth-context';
 
 interface Answer {
     id: string;
@@ -11,8 +22,6 @@ interface Answer {
     answerText: string;
     authorId: string;
     authorName: string;
-    authorAvatar: string;
-    createdAt?: any;
     upvotes: number;
     isAccepted: boolean;
 }
@@ -25,13 +34,78 @@ interface Question {
     useCase?: string;
     authorId: string;
     authorName: string;
-    authorAvatar: string;
-    createdAt?: any;
     answersCount: number;
     upvotes: number;
     isResolved: boolean;
     tags: string[];
 }
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+
+const asText = (value: unknown, fallback: string, maxLength: number) => {
+    if (typeof value !== 'string') return fallback;
+    const normalized = value.trim();
+    return normalized ? normalized.slice(0, maxLength) : fallback;
+};
+
+const asOptionalText = (value: unknown, maxLength: number) => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    return normalized ? normalized.slice(0, maxLength) : undefined;
+};
+
+const asCount = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.trunc(value))
+        : 0;
+
+const asTags = (value: unknown) =>
+    Array.isArray(value)
+        ? value
+            .filter((tag): tag is string => typeof tag === 'string')
+            .map((tag) => tag.trim().slice(0, 30))
+            .filter(Boolean)
+            .slice(0, 10)
+        : [];
+
+function normalizeQuestion(id: string, value: unknown): Question {
+    const data = asRecord(value);
+    return {
+        id,
+        title: asText(data.title, '未命名问题', 100),
+        description: asText(data.description, '暂时没有问题描述。', 1200),
+        budget: asOptionalText(data.budget, 40),
+        useCase: asOptionalText(data.useCase, 40),
+        authorId: asText(data.authorId, '', 128),
+        authorName: asText(data.authorName, '拍点啥用户', 40),
+        answersCount: asCount(data.answersCount),
+        upvotes: asCount(data.upvotes),
+        isResolved: data.isResolved === true,
+        tags: asTags(data.tags),
+    };
+}
+
+function normalizeAnswer(id: string, questionId: string, value: unknown): Answer {
+    const data = asRecord(value);
+    return {
+        id,
+        questionId: asText(data.questionId, questionId, 128),
+        answerText: asText(data.answerText, '这条回答暂时无法显示。', 2000),
+        authorId: asText(data.authorId, '', 128),
+        authorName: asText(data.authorName, '拍点啥用户', 40),
+        upvotes: asCount(data.upvotes),
+        isAccepted: data.isAccepted === true,
+    };
+}
+
+const getAuthorInitial = (authorName: string) =>
+    Array.from(authorName.trim())[0]?.toUpperCase() || '拍';
+
+const isNavigableAuthorId = (authorId: string) =>
+    /^[A-Za-z0-9_-]{1,128}$/.test(authorId);
 
 const MOCK_QUESTION: Question = {
     id: 'qa1',
@@ -41,7 +115,6 @@ const MOCK_QUESTION: Question = {
     useCase: '人像摄影',
     authorId: 'user1',
     authorName: '摄影小白',
-    authorAvatar: 'https://i.pravatar.cc/150?u=q1',
     answersCount: 3,
     upvotes: 45,
     isResolved: true,
@@ -55,7 +128,6 @@ const MOCK_ANSWERS: Answer[] = [
         answerText: '这个预算推荐 Sony A7M4， 对焦性能非常出色，特别是人眼对焦，拍人像很方便。直出颜色通过创意外观也能调出很好看的肤色。',
         authorId: 'user10',
         authorName: '器材老玩家',
-        authorAvatar: 'https://i.pravatar.cc/150?u=a1',
         upvotes: 23,
         isAccepted: true,
     },
@@ -65,7 +137,6 @@ const MOCK_ANSWERS: Answer[] = [
         answerText: 'Canon R6 Mark II 也很好，直出肤色是业界标杆，拍人像非常省心。就是价格可能稍微超预算一点点。',
         authorId: 'user11',
         authorName: 'Canon粉',
-        authorAvatar: 'https://i.pravatar.cc/150?u=a2',
         upvotes: 12,
         isAccepted: false,
     },
@@ -75,7 +146,6 @@ const MOCK_ANSWERS: Answer[] = [
         answerText: '如果不介意aps-c画幅，富士X-T5也是很好的选择。胶片模拟拍人像很有味道，而且性价比很高。',
         authorId: 'user12',
         authorName: '富士用户',
-        authorAvatar: 'https://i.pravatar.cc/150?u=a3',
         upvotes: 8,
         isAccepted: false,
     },
@@ -85,53 +155,111 @@ export default function QuestionDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const insets = useSafeAreaInsets();
     const router = useRouter();
+    const { user } = useAuth();
     const [question, setQuestion] = useState<Question | null>(null);
     const [answers, setAnswers] = useState<Answer[]>([]);
     const [loading, setLoading] = useState(true);
+    const [isCuratedExample, setIsCuratedExample] = useState(false);
     const [answerText, setAnswerText] = useState('');
+    const [submitting, setSubmitting] = useState(false);
+
+    const openAnswerAuthor = (answer: Answer) => {
+        if (isCuratedExample || !isNavigableAuthorId(answer.authorId)) return;
+        router.push({
+            pathname: '/user/[id]' as never,
+            params: { id: answer.authorId, name: answer.authorName },
+        });
+    };
 
     useEffect(() => {
+        let unsubscribeAnswers: (() => void) | undefined;
+        let active = true;
         async function fetchData() {
-            if (!id) return;
+            if (!id) {
+                if (active) setLoading(false);
+                return;
+            }
 
             try {
                 const docRef = doc(db, 'questions', id);
                 const docSnap = await getDoc(docRef);
+                if (!active) return;
 
                 if (docSnap.exists()) {
-                    setQuestion({ id: docSnap.id, ...docSnap.data() } as Question);
+                    setIsCuratedExample(false);
+                    setQuestion(normalizeQuestion(docSnap.id, docSnap.data()));
+                    const answersQuery = query(
+                        collection(db, 'questions', id, 'answers'),
+                        orderBy('createdAt', 'asc'),
+                    );
+                    const unsubscribe = onSnapshot(answersQuery, (snapshot) => {
+                        if (!active) return;
+                        setAnswers(snapshot.docs.map((answerDoc) =>
+                            normalizeAnswer(answerDoc.id, id, answerDoc.data()),
+                        ));
+                    });
+                    if (!active) {
+                        unsubscribe();
+                        return;
+                    }
+                    unsubscribeAnswers = unsubscribe;
                 } else {
+                    setIsCuratedExample(true);
                     setQuestion(MOCK_QUESTION);
+                    setAnswers(MOCK_ANSWERS);
                 }
-            } catch (e) {
+            } catch {
+                if (!active) return;
+                setIsCuratedExample(true);
                 setQuestion(MOCK_QUESTION);
-            } finally {
-                // Mock answers for now
                 setAnswers(MOCK_ANSWERS);
-                setLoading(false);
+            } finally {
+                if (active) setLoading(false);
             }
         }
 
-        fetchData();
+        void fetchData();
+        return () => {
+            active = false;
+            unsubscribeAnswers?.();
+        };
     }, [id]);
 
     const handleSubmitAnswer = async () => {
-        if (!answerText.trim()) return;
+        if (!answerText.trim() || !id || submitting) return;
+        if (!user) {
+            router.push({ pathname: '/auth' as never, params: { returnTo: `/question/${id}` } });
+            return;
+        }
 
-        // In real app, this would add to Firestore
-        const newAnswer: Answer = {
-            id: `a${Date.now()}`,
-            questionId: id || 'qa1',
-            answerText: answerText.trim(),
-            authorId: 'currentUser',
-            authorName: '当前用户',
-            authorAvatar: 'https://i.pravatar.cc/150?u=current',
-            upvotes: 0,
-            isAccepted: false,
-        };
-
-        setAnswers(prev => [...prev, newAnswer]);
-        setAnswerText('');
+        setSubmitting(true);
+        try {
+            const questionRef = doc(db, 'questions', id);
+            const answerRef = doc(collection(db, 'questions', id, 'answers'));
+            await runTransaction(db, async (transaction) => {
+                const questionSnapshot = await transaction.get(questionRef);
+                if (!questionSnapshot.exists()) throw new Error('question-not-found');
+                transaction.set(answerRef, {
+                    questionId: id,
+                    answerText: answerText.trim(),
+                    authorId: user.uid,
+                    authorName: getSafeAuthorName(user.displayName),
+                    authorAvatar: '',
+                    createdAt: serverTimestamp(),
+                    upvotes: 0,
+                    isAccepted: false,
+                });
+                transaction.update(questionRef, {
+                    answersCount: increment(1),
+                    lastAnswerId: answerRef.id,
+                });
+            });
+            setAnswerText('');
+        } catch {
+            Alert.alert('发送失败', '请检查网络后重试。');
+        } finally {
+            setSubmitting(false);
+        }
     };
 
     if (loading) {
@@ -217,35 +345,69 @@ export default function QuestionDetailScreen() {
                                 <Text style={styles.acceptedBannerText}>最佳答案</Text>
                             </View>
                         )}
-                        <View style={styles.answerHeader}>
-                            <Image source={{ uri: answer.authorAvatar }} style={styles.answerAvatar} />
+                        <TouchableOpacity
+                            style={styles.answerHeader}
+                            activeOpacity={0.72}
+                            disabled={isCuratedExample || !isNavigableAuthorId(answer.authorId)}
+                            onPress={() => openAnswerAuthor(answer)}
+                            accessibilityRole={
+                                !isCuratedExample && isNavigableAuthorId(answer.authorId)
+                                    ? 'button'
+                                    : undefined
+                            }
+                            accessibilityLabel={
+                                !isCuratedExample && isNavigableAuthorId(answer.authorId)
+                                    ? `查看${answer.authorName}的作品`
+                                    : undefined
+                            }
+                        >
+                            <View style={styles.answerAvatar}>
+                                <Text style={styles.answerAvatarText}>
+                                    {getAuthorInitial(answer.authorName)}
+                                </Text>
+                            </View>
                             <Text style={styles.answerAuthor}>{answer.authorName}</Text>
-                        </View>
-                        <Text style={styles.answerText}>{answer.answerText}</Text>
-                        <TouchableOpacity style={styles.upvoteBtn}>
-                            <Text style={styles.upvoteText}>↑ {answer.upvotes}</Text>
+                            {!isCuratedExample && isNavigableAuthorId(answer.authorId) ? (
+                                <Text style={styles.answerWorksLink}>看作品 ›</Text>
+                            ) : null}
                         </TouchableOpacity>
+                        <Text style={styles.answerText}>{answer.answerText}</Text>
+                        <View style={styles.upvoteBtn}>
+                            <Text style={styles.upvoteText}>↑ {answer.upvotes}</Text>
+                        </View>
                     </View>
                 ))}
             </ScrollView>
 
             {/* Answer Input */}
             <View style={[styles.inputContainer, { paddingBottom: insets.bottom + 20 }]}>
-                <TextInput
-                    style={styles.input}
-                    placeholder="写下你的回答..."
-                    placeholderTextColor="#86868B"
-                    multiline
-                    value={answerText}
-                    onChangeText={setAnswerText}
-                />
-                <TouchableOpacity
-                    style={[styles.submitBtn, !answerText.trim() && styles.submitBtnDisabled]}
-                    onPress={handleSubmitAnswer}
-                    disabled={!answerText.trim()}
-                >
-                    <Text style={styles.submitBtnText}>发送</Text>
-                </TouchableOpacity>
+                {isCuratedExample ? (
+                    <TouchableOpacity
+                        style={styles.curatedButton}
+                        onPress={() => router.push('/ask-question')}
+                    >
+                        <Text style={styles.curatedButtonText}>这是精选示例，去发布一个真实问题</Text>
+                    </TouchableOpacity>
+                ) : (
+                    <>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="写下你的回答..."
+                            placeholderTextColor="#86868B"
+                            multiline
+                            maxLength={2000}
+                            value={answerText}
+                            onChangeText={setAnswerText}
+                        />
+                        <TouchableOpacity
+                            style={[styles.submitBtn, !answerText.trim() && styles.submitBtnDisabled]}
+                            onPress={handleSubmitAnswer}
+                            disabled={!answerText.trim() || submitting}
+                        >
+                            <Text style={styles.submitBtnText}>{submitting ? '发送中' : '发送'}</Text>
+                        </TouchableOpacity>
+                    </>
+                )}
             </View>
         </View>
     );
@@ -406,12 +568,27 @@ const styles = StyleSheet.create({
         width: 32,
         height: 32,
         borderRadius: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#D85331',
+    },
+    answerAvatarText: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        fontWeight: '800',
     },
     answerAuthor: {
+        flex: 1,
         fontSize: 14,
         fontWeight: '600',
         color: '#1D1D1F',
         marginLeft: 10,
+    },
+    answerWorksLink: {
+        marginLeft: 10,
+        color: '#C64C2F',
+        fontSize: 12,
+        fontWeight: '800',
     },
     answerText: {
         fontSize: 15,
@@ -449,6 +626,21 @@ const styles = StyleSheet.create({
         fontSize: 15,
         color: '#1D1D1F',
         maxHeight: 100,
+    },
+    curatedButton: {
+        flex: 1,
+        minHeight: 48,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 16,
+        borderRadius: 12,
+        backgroundColor: '#FFF0E9',
+    },
+    curatedButtonText: {
+        color: '#C64C2F',
+        fontSize: 13,
+        fontWeight: '800',
+        textAlign: 'center',
     },
     submitBtn: {
         backgroundColor: '#FF2D55',

@@ -1,8 +1,9 @@
 import { useRouter } from 'expo-router';
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore';
-import React, { useEffect, useMemo, useState } from 'react';
+import { collection, doc, getDoc, limit, onSnapshot, query, where } from 'firebase/firestore';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Modal,
@@ -17,28 +18,61 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { DEVICE_OPTIONS, useAppPreferences } from '@/src/app-preferences-context';
+import { useAuth } from '@/src/auth-context';
 import { db } from '@/src/config/firebase';
 import { SEED_POST_BY_ID } from '@/src/data/seed-posts';
 import { useOnboardingTour, useTourTarget } from '@/src/onboarding-tour-context';
-import { useSavedShots } from '@/src/saved-shots-context';
+import { useSavedShots, type SavedShotKind } from '@/src/saved-shots-context';
 
 type ProfileTab = 'works' | 'answers' | 'saved';
 
 type RemotePost = {
   id: string;
-  imageUrl?: string;
-  imageUrls?: string[];
-  userId?: string;
-  likes?: number;
-  title?: string;
+  imageUrl: string;
+  userId: string;
+  likes: number;
+  title: string;
+  createdAt?: { seconds?: number; toMillis?: () => number };
 };
 
 type GridItem = {
   id: string;
   image: ImageSourcePropType;
   kind: 'work' | 'saved';
+  savedKind?: SavedShotKind;
   likes?: number;
   title?: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const normalizeRemotePost = (id: string, value: unknown): RemotePost | null => {
+  if (!isRecord(value)) return null;
+  const imageUrl = typeof value.imageUrl === 'string' ? value.imageUrl : '';
+  const title = typeof value.title === 'string' ? value.title.trim() : '';
+  const userId = typeof value.userId === 'string' ? value.userId : '';
+  const likes = value.likes;
+  if (
+    !imageUrl.startsWith('data:image/jpeg;base64,')
+    || imageUrl.length > 800000
+    || title.length === 0
+    || title.length > 40
+    || userId.length === 0
+    || userId.length > 128
+    || typeof likes !== 'number'
+    || !Number.isInteger(likes)
+    || likes < 0
+  ) {
+    return null;
+  }
+
+  const rawCreatedAt = value.createdAt;
+  const createdAt = isRecord(rawCreatedAt)
+    && (typeof rawCreatedAt.toMillis === 'function' || typeof rawCreatedAt.seconds === 'number')
+    ? rawCreatedAt as RemotePost['createdAt']
+    : undefined;
+  return { id, imageUrl, title, userId, likes, createdAt };
 };
 
 const TABS: readonly {
@@ -54,6 +88,7 @@ const TABS: readonly {
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { user, loading: authLoading, signOut } = useAuth();
   const {
     city,
     device,
@@ -68,43 +103,135 @@ export default function ProfileScreen() {
     stepIndex,
     temporarySaved,
   } = useOnboardingTour();
-  const savedTabTourTarget = useTourTarget('profile-saved');
-  const { entries, hydrated, remove } = useSavedShots();
+  const listRef = useRef<FlatList<GridItem>>(null);
+  const savedTabTourTarget = useTourTarget('profile-saved', {
+    prepare: () => listRef.current?.scrollToOffset({ offset: 0, animated: false }),
+  });
+  const { entries, hydrated, remove, syncError } = useSavedShots();
 
   const [activeTab, setActiveTab] = useState<ProfileTab>('works');
   const [posts, setPosts] = useState<RemotePost[]>([]);
+  const [postsError, setPostsError] = useState('');
+  const [savedRemotePosts, setSavedRemotePosts] = useState<Record<string, RemotePost>>({});
+  const [savedRemoteLoading, setSavedRemoteLoading] = useState(false);
+  const [savedRemoteError, setSavedRemoteError] = useState('');
   const [devicePickerVisible, setDevicePickerVisible] = useState(false);
 
   useEffect(() => {
-    const postsQuery = query(collection(db, 'posts'), orderBy('createdAt', 'desc'));
+    if (!user) {
+      setPosts([]);
+      setPostsError('');
+      return;
+    }
+    const postsQuery = query(collection(db, 'posts'), where('userId', '==', user.uid), limit(30));
     return onSnapshot(
       postsQuery,
       (snapshot) => {
-        setPosts(
-          snapshot.docs.map((snapshotDoc) => ({
-            id: snapshotDoc.id,
-            ...(snapshotDoc.data() as Omit<RemotePost, 'id'>),
-          })),
-        );
+        setPostsError('');
+        setPosts(snapshot.docs
+          .flatMap((snapshotDoc) => {
+            const normalized = normalizeRemotePost(snapshotDoc.id, snapshotDoc.data());
+            return normalized ? [normalized] : [];
+          })
+          .sort((left, right) => {
+            const leftTime = left.createdAt?.toMillis?.() ?? (left.createdAt?.seconds ?? 0) * 1000;
+            const rightTime = right.createdAt?.toMillis?.() ?? (right.createdAt?.seconds ?? 0) * 1000;
+            return rightTime - leftTime;
+          }));
       },
-      () => setPosts([]),
+      () => {
+        setPostsError('暂时无法读取云端作品，已保留上次内容。');
+      },
     );
-  }, []);
+  }, [user]);
+
+  const remoteSavedIds = useMemo(
+    () => entries.filter((entry) => entry.kind === 'remote').map((entry) => entry.postId),
+    [entries],
+  );
+
+  useEffect(() => {
+    setSavedRemotePosts({});
+    setSavedRemoteError('');
+  }, [user?.uid]);
+
+  useEffect(() => {
+    let active = true;
+    if (!user || !hydrated) {
+      setSavedRemoteLoading(Boolean(user && !hydrated));
+      return () => {
+        active = false;
+      };
+    }
+    if (remoteSavedIds.length === 0) {
+      setSavedRemotePosts({});
+      setSavedRemoteError('');
+      setSavedRemoteLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setSavedRemoteLoading(true);
+    const loadSavedRemotePosts = async () => {
+      const results = await Promise.all(remoteSavedIds.map(async (postId) => {
+        try {
+          const snapshot = await getDoc(doc(db, 'posts', postId));
+          if (!snapshot.exists()) {
+            return { postId, status: 'missing' as const, post: null };
+          }
+          const post = normalizeRemotePost(snapshot.id, snapshot.data());
+          return { postId, status: post ? 'ready' as const : 'invalid' as const, post };
+        } catch {
+          return { postId, status: 'error' as const, post: null };
+        }
+      }));
+      if (!active) return;
+
+      setSavedRemotePosts((current) => {
+        const next: Record<string, RemotePost> = {};
+        for (const result of results) {
+          if (result.post) next[result.postId] = result.post;
+          else if (result.status === 'error' && current[result.postId]) {
+            next[result.postId] = current[result.postId];
+          }
+        }
+        return next;
+      });
+      if (results.some((result) => result.status === 'error')) {
+        setSavedRemoteError('部分想拍作品暂时无法读取，已保留上次内容。');
+      } else if (results.some((result) => result.status === 'missing' || result.status === 'invalid')) {
+        setSavedRemoteError('部分想拍作品已下架或数据无效。');
+      } else {
+        setSavedRemoteError('');
+      }
+      setSavedRemoteLoading(false);
+    };
+    void loadSavedRemotePosts();
+
+    return () => {
+      active = false;
+    };
+  }, [hydrated, remoteSavedIds, user]);
 
   const myPosts = useMemo(
-    () => posts.filter((post) => post.userId === 'guest'),
-    [posts],
+    () => user ? posts.filter((post) => post.userId === user.uid) : [],
+    [posts, user],
   );
+
+  const openPublish = () => {
+    if (user) router.push('/modal');
+    else router.push({ pathname: '/auth' as never, params: { returnTo: '/modal' } });
+  };
 
   const workItems = useMemo<GridItem[]>(
     () =>
       myPosts
-        .filter((post) => post.imageUrl || post.imageUrls?.[0])
         .map((post) => ({
           id: post.id,
-          image: { uri: post.imageUrl || post.imageUrls?.[0] },
+          image: { uri: post.imageUrl },
           kind: 'work',
-          likes: post.likes || 0,
+          likes: post.likes,
           title: post.title,
         })),
     [myPosts],
@@ -112,19 +239,34 @@ export default function ProfileScreen() {
 
   const savedItems = useMemo<GridItem[]>(
     () =>
-      entries.flatMap((entry) => {
-        const post = SEED_POST_BY_ID[entry.postId];
+      entries.flatMap<GridItem>((entry): GridItem[] => {
+        if (entry.kind === 'seed') {
+          const post = SEED_POST_BY_ID[entry.postId];
+          return post
+            ? [{
+                id: post.id,
+                image: post.image.source,
+                kind: 'saved' as const,
+                savedKind: 'seed' as const,
+                likes: post.likes,
+                title: post.title,
+              }]
+            : [];
+        }
+
+        const post = savedRemotePosts[entry.postId];
         return post
           ? [{
               id: post.id,
-              image: post.image.source,
+              image: { uri: post.imageUrl },
               kind: 'saved' as const,
+              savedKind: 'remote' as const,
               likes: post.likes,
               title: post.title,
             }]
           : [];
       }),
-    [entries],
+    [entries, savedRemotePosts],
   );
 
   const displayedSavedItems = useMemo<GridItem[]>(() => {
@@ -137,6 +279,7 @@ export default function ProfileScreen() {
         id: post.id,
         image: post.image.source,
         kind: 'saved',
+        savedKind: 'seed',
         likes: post.likes,
         title: post.title,
       },
@@ -156,16 +299,27 @@ export default function ProfileScreen() {
 
   const openItem = (item: GridItem) => {
     router.push({
-      pathname: item.kind === 'saved' ? '/shot/[id]' : '/post/[id]',
+      pathname: item.kind === 'saved' && item.savedKind !== 'remote' ? '/shot/[id]' : '/post/[id]',
       params: { id: item.id },
     });
+  };
+
+  const removeSavedItem = async (item: GridItem) => {
+    if (item.kind !== 'saved' || !item.savedKind) return;
+    try {
+      await remove(item.id, item.savedKind);
+    } catch {
+      Alert.alert('同步失败', '作品仍在想拍清单中，请检查网络后重试。');
+    }
   };
 
   const emptyCopy =
     displayedTab === 'saved'
       ? {
           title: '还没有想拍的照片',
-          body: '看到心动的作品后，进入详情点“加入想拍清单”。',
+          body: user
+            ? '看到心动的作品后，进入详情点“加入想拍清单”。'
+            : '登录后可把想拍作品同步到账号，并在其他设备继续查看。',
           icon: 'bookmark' as const,
         }
       : activeTab === 'answers'
@@ -188,14 +342,32 @@ export default function ProfileScreen() {
         </View>
         <View style={styles.profileCopy}>
           <View style={styles.nameRow}>
-            <Text style={styles.username}>北京拍照练习生</Text>
+            <Text style={styles.username}>
+              {user?.displayName || user?.email?.split('@')[0] || '登录后开始记录'}
+            </Text>
             <View style={styles.localBadge}>
-              <Text style={styles.localBadgeText}>本机保存</Text>
+              <Text style={styles.localBadgeText}>{user ? '云端同步' : '未登录'}</Text>
             </View>
           </View>
-          <Text style={styles.bio}>把喜欢的灵感，变成下一张自己拍的照片。</Text>
+          <Text style={styles.bio}>
+            {user?.email || '登录后可发布作品，并在换手机后继续使用。'}
+          </Text>
         </View>
       </View>
+
+      {!authLoading && !user ? (
+        <TouchableOpacity
+          style={styles.loginCard}
+          onPress={() => router.push({ pathname: '/auth' as never, params: { returnTo: '/(tabs)/profile' } })}
+        >
+          <View style={styles.loginCardIcon}><IconSymbol name="lock.fill" size={18} color="#FFFFFF" /></View>
+          <View style={styles.loginCardCopy}>
+            <Text style={styles.loginCardTitle}>登录或注册</Text>
+            <Text style={styles.loginCardBody}>邮箱密码登录，作品和想拍清单同步到账号</Text>
+          </View>
+          <IconSymbol name="chevron.right" size={18} color="#D85331" />
+        </TouchableOpacity>
+      ) : null}
 
       <View style={styles.statsRow}>
         <Stat value={workItems.length} label="作品" />
@@ -226,11 +398,15 @@ export default function ProfileScreen() {
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.publishButton} onPress={() => router.push('/modal')}>
+      <TouchableOpacity style={styles.publishButton} onPress={openPublish}>
         <IconSymbol name="camera.fill" size={18} color="#FFFFFF" />
         <Text style={styles.publishButtonText}>发布单图作品</Text>
       </TouchableOpacity>
       <Text style={styles.publishHint}>只需填写作品名称；设备、时间和参数可从照片信息带入后确认</Text>
+      {postsError ? <Text style={styles.postsError}>{postsError}</Text> : null}
+      {displayedTab === 'saved' && (syncError || savedRemoteError) ? (
+        <Text style={styles.postsError}>{syncError || savedRemoteError}</Text>
+      ) : null}
 
       <View style={styles.gridTabs}>
         {TABS.map((tab) => {
@@ -255,7 +431,7 @@ export default function ProfileScreen() {
         <View style={styles.savedSummary}>
           <View>
             <Text style={styles.savedSummaryTitle}>下一张，从这里挑</Text>
-            <Text style={styles.savedSummaryBody}>想拍清单按加入时间保存在本机</Text>
+            <Text style={styles.savedSummaryBody}>想拍清单按加入时间同步到当前账号</Text>
           </View>
           <Text style={styles.savedSummaryCount}>{displayedSavedItems.length}</Text>
         </View>
@@ -277,8 +453,9 @@ export default function ProfileScreen() {
       </View>
 
       <FlatList
+        ref={listRef}
         data={visibleItems}
-        keyExtractor={(item) => `${item.kind}-${item.id}`}
+        keyExtractor={(item) => `${item.kind}-${item.savedKind ?? 'work'}-${item.id}`}
         numColumns={3}
         extraData={{
           displayedTab,
@@ -303,7 +480,7 @@ export default function ProfileScreen() {
             {item.kind === 'saved' ? (
               <TouchableOpacity
                 style={styles.removeButton}
-                onPress={() => void remove(item.id)}
+                onPress={() => void removeSavedItem(item)}
                 accessibilityLabel="移出想拍清单"
               >
                 <IconSymbol name="xmark" size={15} color="#FFFFFF" />
@@ -312,7 +489,8 @@ export default function ProfileScreen() {
           </View>
         )}
         ListEmptyComponent={
-          !hydrated && displayedTab === 'saved' ? (
+          displayedTab === 'saved'
+          && (!hydrated || (savedRemoteLoading && displayedSavedItems.length === 0)) ? (
             <View style={styles.emptyState}>
               <ActivityIndicator color="#D85331" />
               <Text style={styles.emptyBody}>正在读取想拍清单</Text>
@@ -339,8 +517,8 @@ export default function ProfileScreen() {
                   <Text style={styles.emptyActionText}>看看大家在问什么</Text>
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={styles.emptyAction} onPress={() => router.push('/modal')}>
-                  <Text style={styles.emptyActionText}>发布第一张作品</Text>
+                <TouchableOpacity style={styles.emptyAction} onPress={openPublish}>
+                  <Text style={styles.emptyActionText}>{user ? '发布第一张作品' : '登录后发布作品'}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -402,6 +580,22 @@ export default function ProfileScreen() {
               <IconSymbol name="sparkles" size={16} color="#C64C2F" />
               <Text style={styles.restartGuideText}>开始新手教程</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.accountButton}
+              onPress={() => {
+                setDevicePickerVisible(false);
+                if (user) {
+                  Alert.alert('退出登录', '退出后本机仍保留浏览偏好，云端作品不会删除。', [
+                    { text: '取消', style: 'cancel' },
+                    { text: '退出', style: 'destructive', onPress: () => void signOut() },
+                  ]);
+                } else {
+                  router.push({ pathname: '/auth' as never, params: { returnTo: '/(tabs)/profile' } });
+                }
+              }}
+            >
+              <Text style={styles.accountButtonText}>{user ? '退出登录' : '登录 / 注册'}</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.sheetCloseButton} onPress={() => setDevicePickerVisible(false)}>
               <Text style={styles.sheetCloseText}>暂时不改</Text>
             </TouchableOpacity>
@@ -453,10 +647,15 @@ const styles = StyleSheet.create({
   },
   profileCopy: { flex: 1, marginLeft: 14 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  username: { color: '#202022', fontSize: 18, fontWeight: '900' },
+  username: { flexShrink: 1, color: '#202022', fontSize: 18, fontWeight: '900' },
   localBadge: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 8, backgroundColor: '#EFEAE6' },
   localBadgeText: { color: '#817A7D', fontSize: 8, fontWeight: '800' },
   bio: { color: '#777176', fontSize: 12, lineHeight: 18, marginTop: 5 },
+  loginCard: { marginTop: 15, padding: 13, borderRadius: 18, flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF0E9', borderWidth: 1, borderColor: '#F1D2C4' },
+  loginCardIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#D85331' },
+  loginCardCopy: { flex: 1, marginHorizontal: 10 },
+  loginCardTitle: { color: '#3D302D', fontSize: 13, fontWeight: '900' },
+  loginCardBody: { marginTop: 3, color: '#90766D', fontSize: 9 },
   statsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -505,6 +704,7 @@ const styles = StyleSheet.create({
   },
   publishButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
   publishHint: { color: '#9B9598', fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 7 },
+  postsError: { color: '#B94931', fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 7 },
   gridTabs: {
     flexDirection: 'row',
     marginTop: 23,
@@ -642,6 +842,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF0E9',
   },
   restartGuideText: { color: '#C64C2F', fontSize: 11, fontWeight: '900' },
+  accountButton: { height: 43, alignItems: 'center', justifyContent: 'center', marginTop: 9, borderRadius: 14, borderWidth: 1, borderColor: '#E7DFDB', backgroundColor: '#FFFFFF' },
+  accountButtonText: { color: '#8B4640', fontSize: 11, fontWeight: '900' },
   sheetCloseButton: {
     height: 47,
     alignItems: 'center',

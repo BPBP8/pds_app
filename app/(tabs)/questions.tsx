@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { db } from '../../src/config/firebase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '@/src/auth-context';
 
 interface Question {
     id: string;
@@ -13,12 +14,58 @@ interface Question {
     useCase?: string;
     authorId: string;
     authorName: string;
-    authorAvatar: string;
-    createdAt?: any;
     answersCount: number;
     upvotes: number;
     isResolved: boolean;
     tags: string[];
+}
+
+const asRecord = (value: unknown): Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : {};
+
+const asText = (value: unknown, fallback: string, maxLength: number) => {
+    if (typeof value !== 'string') return fallback;
+    const normalized = value.trim();
+    return normalized ? normalized.slice(0, maxLength) : fallback;
+};
+
+const asOptionalText = (value: unknown, maxLength: number) => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = value.trim();
+    return normalized ? normalized.slice(0, maxLength) : undefined;
+};
+
+const asCount = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value)
+        ? Math.max(0, Math.trunc(value))
+        : 0;
+
+const asTags = (value: unknown) =>
+    Array.isArray(value)
+        ? value
+            .filter((tag): tag is string => typeof tag === 'string')
+            .map((tag) => tag.trim().slice(0, 30))
+            .filter(Boolean)
+            .slice(0, 10)
+        : [];
+
+function normalizeQuestion(id: string, value: unknown): Question {
+    const data = asRecord(value);
+    return {
+        id,
+        title: asText(data.title, '未命名问题', 100),
+        description: asText(data.description, '暂时没有问题描述。', 1200),
+        budget: asOptionalText(data.budget, 40),
+        useCase: asOptionalText(data.useCase, 40),
+        authorId: asText(data.authorId, '', 128),
+        authorName: asText(data.authorName, '拍点啥用户', 40),
+        answersCount: asCount(data.answersCount),
+        upvotes: asCount(data.upvotes),
+        isResolved: data.isResolved === true,
+        tags: asTags(data.tags),
+    };
 }
 
 const MOCK_QUESTIONS: Question[] = [
@@ -30,7 +77,6 @@ const MOCK_QUESTIONS: Question[] = [
         useCase: '人像摄影',
         authorId: 'user1',
         authorName: '摄影小白',
-        authorAvatar: 'https://i.pravatar.cc/150?u=q1',
         answersCount: 12,
         upvotes: 45,
         isResolved: true,
@@ -44,7 +90,6 @@ const MOCK_QUESTIONS: Question[] = [
         useCase: '综合使用',
         authorId: 'user2',
         authorName: '器材纠结党',
-        authorAvatar: 'https://i.pravatar.cc/150?u=q2',
         answersCount: 8,
         upvotes: 32,
         isResolved: false,
@@ -56,7 +101,6 @@ const MOCK_QUESTIONS: Question[] = [
         description: '新手入门，不知道是先用手机拍还是攒钱买相机，想问问两者的实际差别。',
         authorId: 'user3',
         authorName: '新手咨询',
-        authorAvatar: 'https://i.pravatar.cc/150?u=q3',
         answersCount: 23,
         upvotes: 67,
         isResolved: false,
@@ -70,7 +114,6 @@ const MOCK_QUESTIONS: Question[] = [
         useCase: '街头摄影',
         authorId: 'user4',
         authorName: '街拍爱好者',
-        authorAvatar: 'https://i.pravatar.cc/150?u=q4',
         answersCount: 15,
         upvotes: 28,
         isResolved: true,
@@ -83,6 +126,7 @@ const FILTER_OPTIONS = ['全部', '未解决', '已解决', '热门'];
 export default function QuestionsScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
+    const { user } = useAuth();
     const [questions, setQuestions] = useState<Question[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedFilter, setSelectedFilter] = useState('全部');
@@ -95,13 +139,12 @@ export default function QuestionsScreen() {
             const q = query(collection(db, 'questions'), orderBy('createdAt', 'desc'));
             const unsubscribe = onSnapshot(q, (querySnapshot) => {
                 if (!isMounted) return;
-                const data: Question[] = [];
-                querySnapshot.forEach((doc) => {
-                    data.push({ id: doc.id, ...(doc.data() as Omit<Question, 'id'>) });
-                });
+                const data = querySnapshot.docs.map((questionDoc) =>
+                    normalizeQuestion(questionDoc.id, questionDoc.data()),
+                );
                 setQuestions(data.length > 0 ? data : MOCK_QUESTIONS);
                 setLoading(false);
-            }, (error) => {
+            }, () => {
                 if (!isMounted) return;
                 setQuestions(MOCK_QUESTIONS);
                 setLoading(false);
@@ -209,7 +252,10 @@ export default function QuestionsScreen() {
             {/* FAB - Ask Question */}
             <TouchableOpacity
                 style={[styles.fab, { bottom: insets.bottom + 90 }]}
-                onPress={() => router.push('/ask-question')}
+                onPress={() => {
+                    if (user) router.push('/ask-question');
+                    else router.push({ pathname: '/auth' as never, params: { returnTo: '/ask-question' } });
+                }}
             >
                 <Text style={styles.fabText}>+</Text>
             </TouchableOpacity>

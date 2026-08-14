@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, FlatList, Image, Dimensions, ActivityIndicator, TouchableOpacity, ScrollView } from 'react-native';
+import { StyleSheet, View, Text, FlatList, Image, ActivityIndicator, TouchableOpacity, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
-import { BlurView } from 'expo-blur';
-import { collection, query, orderBy, onSnapshot, doc, updateDoc, increment, getDocs } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, doc, increment, getDocs, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../src/config/firebase';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '@/src/auth-context';
 
 
 
@@ -72,17 +72,19 @@ const MOCK_POSTS: Post[] = [
 export default function InspireScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
+    const { user } = useAuth();
     const [posts, setPosts] = useState<Post[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [selectedTag, setSelectedTag] = useState('全部');
+    const [likedPostIds, setLikedPostIds] = useState<Set<string>>(() => new Set());
 
     useEffect(() => {
         let isMounted = true;
         let unsubscribe: any = null;
 
         const fallbackTimeout = setTimeout(() => {
-            if (isMounted && loading) {
+            if (isMounted) {
                 setPosts(MOCK_POSTS);
                 setLoading(false);
             }
@@ -105,7 +107,7 @@ export default function InspireScreen() {
                 setPosts(MOCK_POSTS);
                 setLoading(false);
             });
-        } catch (e) {
+        } catch {
             clearTimeout(fallbackTimeout);
             if (isMounted) {
                 setPosts(MOCK_POSTS);
@@ -139,21 +141,33 @@ export default function InspireScreen() {
     };
 
     const handleLike = async (postId: string) => {
-        // Optimistic update
-        setPosts(prev => prev.map(p => 
-            p.id === postId ? { ...p, likes: (p.likes || 0) + 1 } : p
-        ));
+        if (!user) {
+            router.push({ pathname: '/auth' as never, params: { returnTo: '/(tabs)/shoot' } });
+            return;
+        }
+        if (likedPostIds.has(postId)) return;
 
-        // Sync with Firebase if not mock id
-        if (!postId.startsWith('mock')) {
-            try {
-                const postRef = doc(db, 'posts', postId);
-                await updateDoc(postRef, {
-                    likes: increment(1)
+        try {
+            let createdLike = true;
+            if (!postId.startsWith('mock')) {
+                createdLike = await runTransaction(db, async (transaction) => {
+                    const postRef = doc(db, 'posts', postId);
+                    const likeRef = doc(db, 'posts', postId, 'likes', user.uid);
+                    const existingLike = await transaction.get(likeRef);
+                    if (existingLike.exists()) return false;
+                    transaction.set(likeRef, { userId: user.uid, createdAt: serverTimestamp() });
+                    transaction.update(postRef, { likes: increment(1) });
+                    return true;
                 });
-            } catch (error) {
-                console.error("Like error:", error);
             }
+            setLikedPostIds((current) => new Set(current).add(postId));
+            if (createdLike) {
+                setPosts(prev => prev.map(p =>
+                    p.id === postId ? { ...p, likes: (p.likes || 0) + 1 } : p
+                ));
+            }
+        } catch {
+            // Keep the current count when the remote write is unavailable.
         }
     };
 

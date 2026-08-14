@@ -1,4 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+} from 'firebase/firestore';
 import React, {
   createContext,
   useCallback,
@@ -10,129 +17,207 @@ import React, {
   type PropsWithChildren,
 } from 'react';
 
+import { useAuth } from './auth-context';
+import { db } from './config/firebase';
 import { SEED_POST_BY_ID } from './data/seed-posts';
-
-const STORAGE_KEY = '@pds/want-to-shoot/v1/demo-device';
 
 export type SavedShotEntry = {
   postId: string;
+  kind: SavedShotKind;
   savedAt: string;
 };
 
-type SavedShotStore = {
-  version: 1;
-  entries: SavedShotEntry[];
-};
+export type SavedShotKind = 'seed' | 'remote';
 
 type SavedShotsContextValue = {
   hydrated: boolean;
   entries: SavedShotEntry[];
-  isSaved: (postId: string) => boolean;
-  toggle: (postId: string) => Promise<boolean>;
-  remove: (postId: string) => Promise<void>;
+  syncError: string | null;
+  isSaved: (postId: string, kind?: SavedShotKind) => boolean;
+  toggle: (postId: string, kind?: SavedShotKind) => Promise<boolean>;
+  remove: (postId: string, kind?: SavedShotKind) => Promise<void>;
 };
 
 const SavedShotsContext = createContext<SavedShotsContextValue | null>(null);
 
-const parseEntries = (raw: string | null): SavedShotEntry[] => {
-  if (!raw) return [];
+const savedShotKey = (postId: string, kind: SavedShotKind) => `${kind}:${postId}`;
 
-  try {
-    const parsed = JSON.parse(raw) as Partial<SavedShotStore>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.entries)) return [];
+const sameSavedShot = (entry: SavedShotEntry, postId: string, kind: SavedShotKind) =>
+  entry.postId === postId && entry.kind === kind;
 
-    const seen = new Set<string>();
-    return parsed.entries.filter((entry): entry is SavedShotEntry => {
+const sortSavedShots = (items: SavedShotEntry[]) =>
+  [...items].sort((left, right) => right.savedAt.localeCompare(left.savedAt));
+
+const isValidPostId = (postId: string) =>
+  postId.length > 0 && postId.length <= 128 && !postId.includes('/');
+
+export function SavedShotsProvider({ children }: PropsWithChildren) {
+  const { user, loading: authLoading } = useAuth();
+  const [hydrated, setHydrated] = useState(false);
+  const [entries, setEntries] = useState<SavedShotEntry[]>([]);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const entriesRef = useRef<SavedShotEntry[]>([]);
+  const pendingRef = useRef(new Set<string>());
+  const hasSnapshotRef = useRef(false);
+
+  const replaceEntries = useCallback((nextEntries: SavedShotEntry[]) => {
+    entriesRef.current = nextEntries;
+    setEntries(nextEntries);
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) {
+      replaceEntries([]);
+      pendingRef.current.clear();
+      hasSnapshotRef.current = false;
+      setSyncError(null);
+      setHydrated(true);
+      return;
+    }
+
+    replaceEntries([]);
+    pendingRef.current.clear();
+    hasSnapshotRef.current = false;
+    setSyncError(null);
+    setHydrated(false);
+    const savedCollection = collection(db, 'users', user.uid, 'savedShots');
+    return onSnapshot(
+      savedCollection,
+      (snapshot) => {
+        const nextEntries = snapshot.docs
+          .flatMap((savedDoc): SavedShotEntry[] => {
+            const data = savedDoc.data() as Record<string, unknown>;
+            const postId = typeof data.postId === 'string' ? data.postId : '';
+            const kind = data.kind === 'seed' || data.kind === 'remote' ? data.kind : null;
+            if (
+              !kind
+              || !isValidPostId(postId)
+              || savedDoc.id !== savedShotKey(postId, kind)
+              || (kind === 'seed' && !SEED_POST_BY_ID[postId])
+            ) {
+              return [];
+            }
+
+            const rawSavedAt = data.savedAt;
+            let savedAt = new Date().toISOString();
+            if (
+              typeof rawSavedAt === 'object'
+              && rawSavedAt !== null
+              && 'toDate' in rawSavedAt
+              && typeof rawSavedAt.toDate === 'function'
+            ) {
+              const date = rawSavedAt.toDate();
+              if (date instanceof Date && !Number.isNaN(date.getTime())) {
+                savedAt = date.toISOString();
+              }
+            }
+            return [{ postId, kind, savedAt }];
+          });
+        replaceEntries(sortSavedShots(nextEntries));
+        hasSnapshotRef.current = true;
+        setSyncError(null);
+        setHydrated(true);
+      },
+      () => {
+        setSyncError('想拍清单暂时无法同步，已保留上次读取的内容。');
+        setHydrated(hasSnapshotRef.current);
+      },
+    );
+  }, [authLoading, replaceEntries, user]);
+
+  const toggle = useCallback(
+    async (postId: string, kind: SavedShotKind = 'seed') => {
       if (
-        !entry ||
-        typeof entry.postId !== 'string' ||
-        typeof entry.savedAt !== 'string' ||
-        !SEED_POST_BY_ID[entry.postId] ||
-        seen.has(entry.postId)
+        !user
+        || !hydrated
+        || !isValidPostId(postId)
+        || (kind === 'seed' && !SEED_POST_BY_ID[postId])
       ) {
         return false;
       }
 
-      seen.add(entry.postId);
-      return true;
-    });
-  } catch {
-    return [];
-  }
-};
+      const operationKey = savedShotKey(postId, kind);
+      if (pendingRef.current.has(operationKey)) {
+        return entriesRef.current.some((entry) => sameSavedShot(entry, postId, kind));
+      }
 
-export function SavedShotsProvider({ children }: PropsWithChildren) {
-  const [hydrated, setHydrated] = useState(false);
-  const [entries, setEntries] = useState<SavedShotEntry[]>([]);
-  const entriesRef = useRef<SavedShotEntry[]>([]);
-  const writeQueue = useRef(Promise.resolve());
-
-  useEffect(() => {
-    let active = true;
-
-    void AsyncStorage.getItem(STORAGE_KEY)
-      .then((raw) => {
-        if (!active) return;
-        const savedEntries = parseEntries(raw);
-        entriesRef.current = savedEntries;
-        setEntries(savedEntries);
-      })
-      .finally(() => {
-        if (active) setHydrated(true);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const persist = useCallback((nextEntries: SavedShotEntry[]) => {
-    const payload: SavedShotStore = { version: 1, entries: nextEntries };
-    writeQueue.current = writeQueue.current
-      .catch(() => undefined)
-      .then(() => AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(payload)));
-    return writeQueue.current;
-  }, []);
-
-  const toggle = useCallback(
-    async (postId: string) => {
-      if (!hydrated || !SEED_POST_BY_ID[postId]) return false;
-
-      const currentlySaved = entriesRef.current.some((entry) => entry.postId === postId);
+      const previousEntry = entriesRef.current.find((entry) => sameSavedShot(entry, postId, kind));
+      const currentlySaved = Boolean(previousEntry);
       const nextEntries = currentlySaved
-        ? entriesRef.current.filter((entry) => entry.postId !== postId)
-        : [{ postId, savedAt: new Date().toISOString() }, ...entriesRef.current];
+        ? entriesRef.current.filter((entry) => !sameSavedShot(entry, postId, kind))
+        : [{ postId, kind, savedAt: new Date().toISOString() }, ...entriesRef.current];
 
-      entriesRef.current = nextEntries;
-      setEntries(nextEntries);
-      await persist(nextEntries);
-      return !currentlySaved;
+      pendingRef.current.add(operationKey);
+      replaceEntries(nextEntries);
+      const savedRef = doc(db, 'users', user.uid, 'savedShots', operationKey);
+      try {
+        if (currentlySaved) {
+          await deleteDoc(savedRef);
+        } else {
+          await setDoc(savedRef, { postId, kind, savedAt: serverTimestamp() });
+        }
+        setSyncError(null);
+        return !currentlySaved;
+      } catch (error) {
+        const rollbackEntries = currentlySaved && previousEntry
+          ? sortSavedShots([
+              previousEntry,
+              ...entriesRef.current.filter((entry) => !sameSavedShot(entry, postId, kind)),
+            ])
+          : entriesRef.current.filter((entry) => !sameSavedShot(entry, postId, kind));
+        replaceEntries(rollbackEntries);
+        setSyncError('同步失败，想拍清单没有改变，请检查网络后重试。');
+        throw error;
+      } finally {
+        pendingRef.current.delete(operationKey);
+      }
     },
-    [hydrated, persist],
+    [hydrated, replaceEntries, user],
   );
 
   const remove = useCallback(
-    async (postId: string) => {
-      if (!hydrated) return;
-      const nextEntries = entriesRef.current.filter((entry) => entry.postId !== postId);
+    async (postId: string, kind: SavedShotKind = 'seed') => {
+      if (!user || !hydrated || !isValidPostId(postId)) return;
+      const operationKey = savedShotKey(postId, kind);
+      if (pendingRef.current.has(operationKey)) return;
+
+      const previousEntry = entriesRef.current.find((entry) => sameSavedShot(entry, postId, kind));
+      const nextEntries = entriesRef.current.filter((entry) => !sameSavedShot(entry, postId, kind));
       if (nextEntries.length === entriesRef.current.length) return;
 
-      entriesRef.current = nextEntries;
-      setEntries(nextEntries);
-      await persist(nextEntries);
+      pendingRef.current.add(operationKey);
+      replaceEntries(nextEntries);
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'savedShots', operationKey));
+        setSyncError(null);
+      } catch (error) {
+        if (previousEntry) {
+          replaceEntries(sortSavedShots([
+            previousEntry,
+            ...entriesRef.current.filter((entry) => !sameSavedShot(entry, postId, kind)),
+          ]));
+        }
+        setSyncError('同步失败，作品仍保留在想拍清单中。');
+        throw error;
+      } finally {
+        pendingRef.current.delete(operationKey);
+      }
     },
-    [hydrated, persist],
+    [hydrated, replaceEntries, user],
   );
 
   const value = useMemo<SavedShotsContextValue>(
     () => ({
       hydrated,
       entries,
-      isSaved: (postId) => entries.some((entry) => entry.postId === postId),
+      syncError,
+      isSaved: (postId, kind = 'seed') =>
+        entries.some((entry) => sameSavedShot(entry, postId, kind)),
       toggle,
       remove,
     }),
-    [entries, hydrated, remove, toggle],
+    [entries, hydrated, remove, syncError, toggle],
   );
 
   return <SavedShotsContext.Provider value={value}>{children}</SavedShotsContext.Provider>;

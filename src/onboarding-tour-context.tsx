@@ -89,6 +89,7 @@ const DEFAULT_POST_ID = 'beijing-forbidden-city-rain';
 const DEFAULT_ORIGIN = '/shoot';
 const TRANSITION_MS = 150;
 const TOAST_MS = 1800;
+const TARGET_CLEANUP_DELAY_MS = 50;
 
 const OnboardingTourContext = createContext<OnboardingTourContextValue | null>(null);
 
@@ -153,6 +154,9 @@ export function OnboardingTourProvider({ children }: { children: ReactNode }) {
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetsRef = useRef(new Map<TourTargetId, TargetRegistration>());
+  const targetCleanupTimersRef = useRef(
+    new Map<TourTargetId, ReturnType<typeof setTimeout>>()
+  );
 
   const [active, setActive] = useState(false);
   const [stepIndex, setStepIndex] = useState<TourStepIndex>(0);
@@ -337,15 +341,44 @@ export function OnboardingTourProvider({ children }: { children: ReactNode }) {
       const current = targetsRef.current.get(id);
 
       if (node) {
+        const cleanupTimer = targetCleanupTimersRef.current.get(id);
+        if (cleanupTimer) {
+          clearTimeout(cleanupTimer);
+          targetCleanupTimersRef.current.delete(id);
+        }
         targetsRef.current.set(id, { node, prepare, token });
-        setTargetVersion((version) => version + 1);
+        // Callback refs can receive a replacement host node when a virtualized
+        // header re-renders. The target is still the same registration, so
+        // notifying the provider again would create a render/ref feedback loop.
+        if (!current || current.token !== token) {
+          setTargetVersion((version) => version + 1);
+        }
         return;
       }
 
-      if (current?.token === token) {
+      if (!current || current.token !== token) {
+        return;
+      }
+
+      const pendingCleanup = targetCleanupTimersRef.current.get(id);
+      if (pendingCleanup) {
+        clearTimeout(pendingCleanup);
+      }
+
+      // Callback refs can briefly detach and reattach during a virtualized
+      // header render. Give the same registration a short grace period, then
+      // remove it if it did not return so cross-page measurement never keeps an
+      // unmounted native host node.
+      const cleanupTimer = setTimeout(() => {
+        targetCleanupTimersRef.current.delete(id);
+        const latest = targetsRef.current.get(id);
+        if (!latest || latest.token !== token) {
+          return;
+        }
         targetsRef.current.delete(id);
         setTargetVersion((version) => version + 1);
-      }
+      }, TARGET_CLEANUP_DELAY_MS);
+      targetCleanupTimersRef.current.set(id, cleanupTimer);
     },
     []
   );
@@ -362,6 +395,11 @@ export function OnboardingTourProvider({ children }: { children: ReactNode }) {
       if (toastTimerRef.current) {
         clearTimeout(toastTimerRef.current);
       }
+      for (const timer of targetCleanupTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      targetCleanupTimersRef.current.clear();
+      targetsRef.current.clear();
     },
     [clearTransitionTimer]
   );
@@ -438,6 +476,7 @@ export function useTourTarget(
   const tokenRef = useRef(Symbol(id));
   const prepareRef = useRef(options.prepare);
   const onLayoutRef = useRef(options.onLayout);
+  const lastLayoutRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
 
   prepareRef.current = options.prepare;
   onLayoutRef.current = options.onLayout;
@@ -457,7 +496,18 @@ export function useTourTarget(
   const onLayout = useCallback(
     (event: LayoutChangeEvent) => {
       onLayoutRef.current?.(event);
-      notifyTargetLayout();
+      const next = event.nativeEvent.layout;
+      const previous = lastLayoutRef.current;
+      lastLayoutRef.current = next;
+      if (
+        !previous
+        || Math.abs(previous.x - next.x) > 0.5
+        || Math.abs(previous.y - next.y) > 0.5
+        || Math.abs(previous.width - next.width) > 0.5
+        || Math.abs(previous.height - next.height) > 0.5
+      ) {
+        notifyTargetLayout();
+      }
     },
     [notifyTargetLayout]
   );

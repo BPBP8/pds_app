@@ -1,473 +1,454 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, Text, ScrollView, Dimensions, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
-import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../../src/config/firebase';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Image } from 'expo-image';
-import { BlurView } from 'expo-blur';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import {
+  doc,
+  getDoc,
+  increment,
+  runTransaction,
+  serverTimestamp,
+} from 'firebase/firestore';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
-const { width, height } = Dimensions.get('window');
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useAuth } from '@/src/auth-context';
+import { db } from '@/src/config/firebase';
+import { useSavedShots } from '@/src/saved-shots-context';
 
-const MOCK_POSTS: any[] = [
-    {
-        id: 'mock1',
-        imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop',
-        imageUrls: ['https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000', 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?q=80&w=1000'],
-        userId: 'ArtLover99',
-        title: 'Neon Nights',
-        likes: 1240,
-        avatar: 'https://i.pravatar.cc/150?u=1',
-        motivation: '色彩练习',
-        mood: '热烈',
-        methods: ['环境光', '极简构图'],
-        notes: '在霓虹灯下寻找那一抹纯净的色彩对比。每次拍摄都是一次对光影界限的探索。',
-        params: { camera: 'Sony A7R4', lens: '35mm f/1.4', focalLength: '35mm', aperture: 'f/1.4', shutter: '1/60', iso: '800' }
-    },
-    {
-        id: 'mock2',
-        imageUrl: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=1000&auto=format&fit=crop',
-        userId: 'Visionary',
-        title: 'Abstract Fluid',
-        likes: 382,
-        avatar: 'https://i.pravatar.cc/150?u=2',
-        motivation: '唯美主义',
-        mood: '超 surreal',
-        methods: ['实验创作'],
-        params: { camera: 'Fujifilm X-T4', focalLength: '56mm' }
-    },
-    {
-        id: 'mock3',
-        imageUrl: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?q=80&w=1000&auto=format&fit=crop',
-        userId: 'ColorPop',
-        title: 'Geometric Harmony',
-        likes: 89,
-        avatar: 'https://i.pravatar.cc/150?u=3',
-        motivation: '影调探索',
-        mood: '客观',
-        methods: ['对称美学'],
-    },
-];
+type PostData = {
+  imageUrl?: string;
+  title?: string;
+  userId?: string;
+  authorName?: string;
+  likes?: number;
+  category?: string;
+  motivation?: string;
+  notes?: string;
+  device?: string;
+  capturedAt?: string | null;
+  location?: { label?: string; precise?: boolean } | null;
+  params?: Record<string, string>;
+  createdAt?: { toDate?: () => Date };
+};
 
-export default function PostDetail() {
-  const { id } = useLocalSearchParams();
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const optionalString = (value: unknown, maxLength: number) =>
+  typeof value === 'string' ? value.slice(0, maxLength) : undefined;
+
+const normalizeRemotePost = (value: unknown): PostData | null => {
+  if (!isRecord(value)) return null;
+  const imageUrl = optionalString(value.imageUrl, 800000);
+  const title = optionalString(value.title, 40)?.trim();
+  if (!imageUrl?.startsWith('data:image/jpeg;base64,') || !title) return null;
+
+  const params = isRecord(value.params)
+    ? Object.fromEntries(
+        Object.entries(value.params).filter((entry): entry is [string, string] =>
+          typeof entry[1] === 'string' && entry[1].length <= 100),
+      )
+    : {};
+  const rawLocation = isRecord(value.location) ? value.location : null;
+  const location = rawLocation && typeof rawLocation.label === 'string'
+    ? {
+        label: rawLocation.label.slice(0, 100),
+        precise: rawLocation.precise === true,
+      }
+    : null;
+  const createdAt = isRecord(value.createdAt) && typeof value.createdAt.toDate === 'function'
+    ? value.createdAt as PostData['createdAt']
+    : undefined;
+
+  return {
+    imageUrl,
+    title,
+    userId: optionalString(value.userId, 128),
+    authorName: optionalString(value.authorName, 40),
+    likes: typeof value.likes === 'number' && Number.isFinite(value.likes)
+      ? Math.max(0, Math.floor(value.likes))
+      : 0,
+    category: optionalString(value.category, 20),
+    motivation: optionalString(value.motivation, 20),
+    notes: optionalString(value.notes, 500),
+    device: optionalString(value.device, 100),
+    capturedAt: value.capturedAt === null ? null : optionalString(value.capturedAt, 50),
+    location,
+    params,
+    createdAt,
+  };
+};
+
+const MOCK_POSTS: Record<string, PostData> = {
+  mock1: {
+    imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop',
+    title: '霓虹夜色',
+    authorName: '北京拍照练习生',
+    likes: 1240,
+    category: '色彩练习',
+    notes: '在霓虹灯下寻找干净的色彩对比。',
+    device: 'Sony A7R IV',
+    capturedAt: '2026:03:23 20:15',
+    params: { lens: '35mm f/1.4', aperture: 'f/1.4', shutter: '1/60s', iso: '800' },
+  },
+  mock2: {
+    imageUrl: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=1000&auto=format&fit=crop',
+    title: '流动的颜色',
+    authorName: 'Visionary',
+    likes: 382,
+    category: '影调探索',
+    device: 'Fujifilm X-T4',
+  },
+  mock3: {
+    imageUrl: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?q=80&w=1000&auto=format&fit=crop',
+    title: '几何与秩序',
+    authorName: 'ColorPop',
+    likes: 89,
+    category: '构图练习',
+  },
+};
+
+const PARAM_LABELS: Record<string, string> = {
+  lens: '镜头',
+  focalLength: '焦距',
+  aperture: '光圈',
+  shutter: '快门',
+  iso: 'ISO',
+};
+
+function formatCapturedAt(value?: string | null) {
+  if (!value) return '';
+  return value.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
+}
+
+export default function PostDetailScreen() {
+  const { id } = useLocalSearchParams<{ id: string | string[] }>();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  
-  const [post, setPost] = useState<any>(null);
+  const { user } = useAuth();
+  const {
+    hydrated: savedShotsHydrated,
+    isSaved,
+    syncError: savedShotsSyncError,
+    toggle,
+  } = useSavedShots();
+  const postId = Array.isArray(id) ? id[0] : id;
+  const [post, setPost] = useState<PostData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [isRemotePost, setIsRemotePost] = useState(false);
+  const [liked, setLiked] = useState(false);
+  const [liking, setLiking] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    const fetchPost = async () => {
+    let active = true;
+    const loadPost = async () => {
+      if (!postId) {
+        if (active) setLoading(false);
+        return;
+      }
       try {
-        const docRef = doc(db, 'posts', id as string);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setPost(docSnap.data());
+        const snapshot = await getDoc(doc(db, 'posts', postId));
+        if (!active) return;
+        if (snapshot.exists()) {
+          const normalized = normalizeRemotePost(snapshot.data());
+          setPost(normalized);
+          setIsRemotePost(Boolean(normalized));
         } else {
-          // Fallback to mock data
-          const mock = MOCK_POSTS.find(m => m.id === id);
-          if (mock) setPost(mock);
+          setPost(MOCK_POSTS[postId] ?? null);
         }
-      } catch (error) {
-        console.error("Error fetching post:", error);
-        const mock = MOCK_POSTS.find(m => m.id === id);
-        if (mock) setPost(mock);
+      } catch {
+        if (active) setPost(MOCK_POSTS[postId] ?? null);
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
-    fetchPost();
-  }, [id]);
+    void loadPost();
+    return () => {
+      active = false;
+    };
+  }, [postId]);
+
+  const imageUrl = post?.imageUrl;
+  const params = useMemo(
+    () => Object.entries(post?.params ?? {}).filter(([, value]) => Boolean(value)),
+    [post?.params],
+  );
+  const saved = Boolean(postId && isRemotePost && isSaved(postId, 'remote'));
+
+  const likePost = async () => {
+    if (!postId || !post || liked || liking) return;
+    if (!user) {
+      router.push({
+        pathname: '/auth' as never,
+        params: { returnTo: `/post/${postId}` },
+      });
+      return;
+    }
+
+    setLiked(true);
+    setLiking(true);
+    setPost((current) => current ? { ...current, likes: (current.likes ?? 0) + 1 } : current);
+    try {
+      if (isRemotePost) {
+        const createdLike = await runTransaction(db, async (transaction) => {
+          const postRef = doc(db, 'posts', postId);
+          const likeRef = doc(db, 'posts', postId, 'likes', user.uid);
+          const existingLike = await transaction.get(likeRef);
+          if (existingLike.exists()) return false;
+          transaction.set(likeRef, { userId: user.uid, createdAt: serverTimestamp() });
+          transaction.update(postRef, { likes: increment(1) });
+          return true;
+        });
+        if (!createdLike) {
+          setPost((current) => current ? { ...current, likes: Math.max((current.likes ?? 1) - 1, 0) } : current);
+        }
+      }
+    } catch {
+      setLiked(false);
+      setPost((current) => current ? { ...current, likes: Math.max((current.likes ?? 1) - 1, 0) } : current);
+      Alert.alert('点赞失败', '这次点赞没有同步成功，请检查网络后重试。');
+    } finally {
+      setLiking(false);
+    }
+  };
+
+  const toggleSaved = async () => {
+    if (!postId || !isRemotePost || !savedShotsHydrated || saving) return;
+    if (!user) {
+      router.push({
+        pathname: '/auth' as never,
+        params: { returnTo: `/post/${postId}` },
+      });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await toggle(postId, 'remote');
+    } catch {
+      Alert.alert('同步失败', '想拍清单没有改变，请检查网络后重试。');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator color="#1D1D1F" />
-      </View>
-    );
+    return <View style={styles.center}><ActivityIndicator color="#D85331" /></View>;
   }
 
-  if (!post) {
+  if (!post || !imageUrl) {
     return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorText}>作品已下架或链接失效</Text>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Text style={styles.backText}>返回首页</Text>
+      <View style={styles.center}>
+        <Text style={styles.missingTitle}>作品暂时无法查看</Text>
+        <TouchableOpacity style={styles.returnButton} onPress={() => router.back()}>
+          <Text style={styles.returnText}>返回</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
-  const imageUrls = post.imageUrls || [post.imageUrl];
+  const capturedAt = formatCapturedAt(post.capturedAt);
+  const publishedAt = post.createdAt?.toDate?.().toLocaleDateString('zh-CN') ?? '';
+  const authorName = post.authorName || '拍点啥用户';
+  const authorInitial = authorName.slice(0, 1).toUpperCase();
 
   return (
     <View style={styles.container}>
-      <Stack.Screen 
-        options={{
-          headerTitle: '',
-          headerTransparent: true,
-          headerTintColor: '#1D1D1F',
-          headerLeft: () => (
-            <TouchableOpacity 
-              style={[styles.circleBtn, { marginLeft: 10 }]} 
-              onPress={() => router.back()}
-            >
-              <IconSymbol name="chevron.left" size={24} color="#1D1D1F" />
-            </TouchableOpacity>
-          ),
-          headerRight: () => (
-            <View style={[styles.headerRight, { marginRight: 10 }]}>
-              <TouchableOpacity style={styles.circleBtn}>
-                <IconSymbol name="heart" size={20} color="#1D1D1F" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.circleBtn}>
-                <IconSymbol name="square.and.arrow.up" size={20} color="#1D1D1F" />
-              </TouchableOpacity>
-            </View>
-          ),
-        }} 
-      />
-
-      <ScrollView 
-        style={styles.scrollView} 
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 100 }}
-      >
-        {/* Image Gallery */}
-        <View style={styles.galleryWrapper}>
-          <ScrollView 
-            horizontal 
-            pagingEnabled 
-            showsHorizontalScrollIndicator={false}
-            onScroll={(e) => {
-              const x = e.nativeEvent.contentOffset.x;
-              // We need the width of the container for accurate paging index
-              // On Web, use the layout width if possible, fallback to Dimensions
-              const layoutWidth = e.nativeEvent.layoutMeasurement.width;
-              setActiveImageIndex(Math.round(x / layoutWidth));
-            }}
-            scrollEventThrottle={16}
-          >
-            {imageUrls.map((url: string, index: number) => (
-              <View key={index} style={styles.imageSlide}>
-                <Image 
-                  source={{ uri: url }} 
-                  style={styles.mainImage} 
-                  contentFit="cover"
-                  transition={200}
-                />
-              </View>
-            ))}
-          </ScrollView>
-          
-          {/* Pagination dots */}
-          {imageUrls.length > 1 && (
-            <View style={styles.pagination}>
-              {imageUrls.map((_: any, i: number) => (
-                <View 
-                  key={i} 
-                  style={[styles.dot, activeImageIndex === i && styles.dotActive]} 
-                />
-              ))}
-            </View>
-          )}
-        </View>
-
-        {/* User Info Bar */}
-        <View style={styles.userBar}>
-          <Image source={{ uri: post.avatar || 'https://i.pravatar.cc/150?u=0' }} style={styles.avatar} />
-          <View>
-            <Text style={styles.username}>{post.userId?.substring(0, 12)}</Text>
-            <Text style={styles.postDate}>{post.createdAt?.toDate ? post.createdAt.toDate().toLocaleDateString() : '2026/03/23'}</Text>
-          </View>
-          <View style={{flex: 1}} />
-          <TouchableOpacity style={styles.followBtn}>
-            <Text style={styles.followText}>关注</Text>
+      <Stack.Screen options={{ headerShown: false }} />
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+        <View style={styles.hero}>
+          <Image source={{ uri: imageUrl }} style={styles.heroImage} contentFit="cover" transition={160} />
+          <TouchableOpacity style={[styles.circleButton, styles.backButton]} onPress={() => router.back()}>
+            <IconSymbol name="chevron.left" size={23} color="#232022" />
           </TouchableOpacity>
         </View>
 
-        {/* Content Section */}
-        <View style={styles.contentSection}>
-          <View style={styles.intentGrid}>
-            <View style={styles.intentItem}>
-              <Text style={styles.intentLabel}>创作意图</Text>
-              <Text style={styles.intentValue}>{post.motivation || '视觉记录'}</Text>
-            </View>
-            <View style={styles.intentItem}>
-              <Text style={styles.intentLabel}>核心情绪</Text>
-              <Text style={styles.intentValue}>{post.mood || '中性'}</Text>
+        <View style={styles.body}>
+          <View style={styles.categoryRow}>
+            <Text style={styles.category}>{post.category || post.motivation || '生活'}</Text>
+            <View style={styles.actionRow}>
+              {isRemotePost ? (
+                <TouchableOpacity
+                  style={[styles.saveButton, saved && styles.saveButtonActive]}
+                  onPress={() => void toggleSaved()}
+                  disabled={!savedShotsHydrated || saving}
+                  accessibilityLabel={saved ? '移出想拍清单' : '加入想拍清单'}
+                  accessibilityHint="想拍清单会同步到当前登录账号"
+                >
+                  <IconSymbol
+                    name={saved ? 'bookmark.fill' : 'bookmark'}
+                    size={18}
+                    color={saved ? '#FFFFFF' : '#D85331'}
+                  />
+                  <Text style={[styles.saveText, saved && styles.saveTextActive]}>
+                    {saving
+                      ? '同步中'
+                      : !savedShotsHydrated
+                        ? savedShotsSyncError ? '同步异常' : '读取中'
+                        : saved ? '已想拍' : '想拍'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={styles.likeButton} onPress={() => void likePost()} disabled={liking}>
+                <IconSymbol name={liked ? 'heart.fill' : 'heart'} size={19} color={liked ? '#D85331' : '#514B4E'} />
+                <Text style={[styles.likeText, liked && styles.likeTextActive]}>{post.likes ?? 0}</Text>
+              </TouchableOpacity>
             </View>
           </View>
 
-          {post.notes && (
-            <View style={styles.notesBox}>
-              <Text style={styles.notesText}>{post.notes}</Text>
-            </View>
-          )}
+          <Text style={styles.title}>{post.title || '未命名作品'}</Text>
 
-          {post.methods && post.methods.length > 0 && (
-            <View style={styles.methodList}>
-              <Text style={styles.intentLabel}>光影与手段</Text>
-              <View style={styles.tagRow}>
-                {post.methods.map((m: string) => (
-                  <View key={m} style={styles.tag}>
-                    <Text style={styles.tagText}>{m}</Text>
-                  </View>
-                ))}
-              </View>
+          <View style={styles.authorRow}>
+            <View style={styles.avatar}><Text style={styles.avatarText}>{authorInitial}</Text></View>
+            <View>
+              <Text style={styles.authorName}>{authorName}</Text>
+              {publishedAt ? <Text style={styles.publishedAt}>发布于 {publishedAt}</Text> : null}
             </View>
-          )}
-        </View>
+          </View>
 
-        {/* Params Panel - Refined Sunny Style */}
-        {post.params && (
-          <View style={styles.paramsContainer}>
-            <View style={styles.paramsPanel}>
-              <Text style={styles.panelTitle}>TECHNICAL DATA</Text>
+          <View style={styles.metadataCard}>
+            {post.device ? <MetadataRow icon="camera.fill" label="拍摄设备" value={post.device} /> : null}
+            {capturedAt ? <MetadataRow icon="clock.fill" label="拍摄时间" value={capturedAt} /> : null}
+            {post.location?.label ? (
+              <MetadataRow
+                icon="location.fill"
+                label="拍摄地点"
+                value={post.location.precise ? post.location.label : `${post.location.label}附近`}
+              />
+            ) : null}
+          </View>
+
+          {post.notes ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>拍摄想法</Text>
+              <Text style={styles.notes}>{post.notes}</Text>
+            </View>
+          ) : null}
+
+          {params.length > 0 ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>拍摄参数</Text>
               <View style={styles.paramsGrid}>
-                {Object.entries(post.params).map(([key, val]: [string, any]) => (
+                {params.map(([key, value]) => (
                   <View key={key} style={styles.paramItem}>
-                    <Text style={styles.paramKey}>{key === 'focalLength' ? 'FOCAL' : key.toUpperCase()}</Text>
-                    <Text style={styles.paramVal}>{val}</Text>
+                    <Text style={styles.paramLabel}>{PARAM_LABELS[key] || key}</Text>
+                    <Text style={styles.paramValue}>{value}</Text>
                   </View>
                 ))}
               </View>
             </View>
-          </View>
-        )}
+          ) : null}
+        </View>
       </ScrollView>
     </View>
   );
 }
 
+function MetadataRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ComponentProps<typeof IconSymbol>['name'];
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.metadataRow}>
+      <View style={styles.metadataIcon}><IconSymbol name={icon} size={16} color="#D85331" /></View>
+      <Text style={styles.metadataLabel}>{label}</Text>
+      <Text numberOfLines={2} style={styles.metadataValue}>{value}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: '#FFFDFC' },
+  content: { paddingBottom: 42 },
+  center: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
     alignItems: 'center',
-  },
-  errorContainer: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
+    padding: 24,
+    backgroundColor: '#FFFDFC',
+  },
+  missingTitle: { color: '#403A3D', fontSize: 17, fontWeight: '800', marginBottom: 18 },
+  returnButton: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 14, backgroundColor: '#D85331' },
+  returnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
+  hero: { width: '100%', aspectRatio: 0.93, backgroundColor: '#EEE8E4' },
+  heroImage: { width: '100%', height: '100%' },
+  circleButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
-    padding: 20,
-  },
-  errorText: {
-    color: '#86868B',
-    fontSize: 16,
-    marginBottom: 20,
-    textAlign: 'center',
-  },
-  backBtn: {
-    backgroundColor: '#1D1D1F',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  backText: {
-    color: '#FFFFFF',
-    fontWeight: 'bold',
-  },
-  header: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    zIndex: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 15,
-  },
-  circleBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.85)',
     justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.05)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.92)',
   },
-  headerRight: {
-      flexDirection: 'row',
-      gap: 12,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  galleryWrapper: {
-    width: '100%',
-    aspectRatio: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  imageSlide: {
-    width: 390, // Fixed width for each slide to match the phone wrapper max-width
-    maxWidth: '100%',
-    aspectRatio: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  mainImage: {
-    width: '100%',
-    height: '100%',
-  },
-  pagination: {
-    position: 'absolute',
-    bottom: 25,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.5)',
-  },
-  dotActive: {
-    backgroundColor: '#FFFFFF',
-    width: 14,
-  },
-  userBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#FFFFFF',
-  },
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    marginRight: 12,
-    borderWidth: 1,
-    borderColor: '#F2F2F2',
-  },
-  username: {
-    color: '#1D1D1F',
-    fontSize: 15,
-    fontWeight: 'bold',
-  },
-  postDate: {
-    color: '#86868B',
-    fontSize: 11,
-    marginTop: 2,
-  },
-  followBtn: {
-    backgroundColor: '#F5F5F7',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-  },
-  followText: {
-    color: '#1D1D1F',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  contentSection: {
-    padding: 20,
-  },
-  intentGrid: {
-    flexDirection: 'row',
-    gap: 20,
-    marginBottom: 30,
-  },
-  intentItem: {
-    flex: 1,
-  },
-  intentLabel: {
-    color: '#86868B',
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 10,
-    letterSpacing: 0.5,
-  },
-  intentValue: {
-    color: '#1D1D1F',
-    fontSize: 20,
-    fontWeight: '900',
-  },
-  methodList: {
-    marginTop: 30,
-    marginBottom: 10,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginTop: 4,
-  },
-  tag: {
+  backButton: { position: 'absolute', top: 18, left: 16 },
+  body: { paddingHorizontal: 20, paddingTop: 18 },
+  categoryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  category: { color: '#D85331', fontSize: 12, fontWeight: '900' },
+  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  saveButton: {
+    minWidth: 76,
+    height: 38,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#F5F5F7',
-    borderRadius: 8,
-  },
-  tagText: {
-    color: '#424245',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  notesBox: {
-    marginTop: 5,
-    paddingVertical: 10,
-  },
-  notesText: {
-    color: '#1D1D1F',
-    fontSize: 16,
-    lineHeight: 26,
-    fontWeight: '400',
-  },
-  paramsContainer: {
-    paddingHorizontal: 20,
-    paddingTop: 10,
-  },
-  paramsPanel: {
-    backgroundColor: '#F5F5F7',
-    padding: 20,
-    borderRadius: 20,
-  },
-  panelTitle: {
-    color: '#86868B',
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-    textAlign: 'center',
-    marginBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EBEBEB',
-    paddingBottom: 12,
-  },
-  paramsGrid: {
+    borderRadius: 19,
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#FFF0E9',
   },
-  paramItem: {
-    width: '50%',
-    marginBottom: 18,
+  saveButtonActive: { backgroundColor: '#D85331' },
+  saveText: { color: '#D85331', fontSize: 12, fontWeight: '900' },
+  saveTextActive: { color: '#FFFFFF' },
+  likeButton: {
+    minWidth: 62,
+    height: 38,
+    paddingHorizontal: 12,
+    borderRadius: 19,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#F4EEEA',
   },
-  paramKey: {
-    color: '#86868B',
-    fontSize: 9,
-    fontWeight: '700',
-    marginBottom: 4,
+  likeText: { color: '#514B4E', fontSize: 13, fontWeight: '800' },
+  likeTextActive: { color: '#D85331' },
+  title: { marginTop: 8, color: '#242123', fontSize: 27, lineHeight: 35, fontWeight: '900' },
+  authorRow: { marginTop: 20, flexDirection: 'row', alignItems: 'center' },
+  avatar: {
+    width: 42,
+    height: 42,
+    marginRight: 11,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#292628',
   },
-  paramVal: {
-    color: '#1D1D1F',
-    fontSize: 14,
-    fontWeight: '800',
-  }
+  avatarText: { color: '#FFFFFF', fontSize: 17, fontWeight: '900' },
+  authorName: { color: '#373234', fontSize: 14, fontWeight: '800' },
+  publishedAt: { marginTop: 3, color: '#9B9396', fontSize: 11 },
+  metadataCard: { marginTop: 22, padding: 16, borderRadius: 18, backgroundColor: '#F5EFEB', gap: 14 },
+  metadataRow: { minHeight: 26, flexDirection: 'row', alignItems: 'center' },
+  metadataIcon: { width: 27 },
+  metadataLabel: { width: 68, color: '#8C8286', fontSize: 11, fontWeight: '700' },
+  metadataValue: { flex: 1, color: '#373234', fontSize: 13, fontWeight: '800', textAlign: 'right' },
+  section: { marginTop: 28 },
+  sectionTitle: { color: '#312C2F', fontSize: 17, fontWeight: '900', marginBottom: 12 },
+  notes: { color: '#5E565A', fontSize: 15, lineHeight: 24 },
+  paramsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  paramItem: { width: '47%', padding: 13, borderRadius: 14, backgroundColor: '#F5EFEB' },
+  paramLabel: { color: '#958B8F', fontSize: 10, fontWeight: '800' },
+  paramValue: { marginTop: 6, color: '#302B2D', fontSize: 15, fontWeight: '900' },
 });

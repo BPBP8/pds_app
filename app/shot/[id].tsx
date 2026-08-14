@@ -1,6 +1,7 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Image,
   Linking,
   ScrollView,
@@ -14,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useAppPreferences } from '@/src/app-preferences-context';
+import { useAuth } from '@/src/auth-context';
 import { formatDistance } from '@/src/distance';
 import { useOnboardingTour, useTourTarget } from '@/src/onboarding-tour-context';
 import { useSavedShots } from '@/src/saved-shots-context';
@@ -24,6 +26,7 @@ export default function ShotDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
+  const { user } = useAuth();
   const { coordinates, device } = useAppPreferences();
   const {
     active: tourActive,
@@ -36,7 +39,7 @@ export default function ShotDetailScreen() {
   const [saving, setSaving] = useState(false);
   const [methodSectionY, setMethodSectionY] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
-  const { hydrated, isSaved, toggle } = useSavedShots();
+  const { hydrated, isSaved, syncError, toggle } = useSavedShots();
   const postId = Array.isArray(id) ? id[0] : id;
   const post = postId ? SEED_POST_BY_ID[postId] : undefined;
   const saved = postId ? isSaved(postId) : false;
@@ -47,9 +50,18 @@ export default function ShotDetailScreen() {
 
   const toggleSaved = async () => {
     if (!post || !hydrated || saving || tourActive) return;
+    if (!user) {
+      router.push({
+        pathname: '/auth' as never,
+        params: { returnTo: `/shot/${post.id}` },
+      });
+      return;
+    }
     setSaving(true);
     try {
       await toggle(post.id);
+    } catch {
+      Alert.alert('同步失败', '想拍清单没有改变，请检查网络后重试。');
     } finally {
       setSaving(false);
     }
@@ -258,10 +270,13 @@ export default function ShotDetailScreen() {
         <IconSymbol name="chevron.left" size={24} color="#1D1D1F" />
       </TouchableOpacity>
 
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 14) }]}>
+      <View
+        ref={saveTourTarget.ref}
+        collapsable={saveTourTarget.collapsable}
+        onLayout={saveTourTarget.onLayout}
+        style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 14) }]}
+      >
         <TouchableOpacity
-          ref={saveTourTarget.ref}
-          onLayout={saveTourTarget.onLayout}
           style={[
             styles.saveButton,
             displaySaved && styles.saveButtonSaved,
@@ -277,7 +292,7 @@ export default function ShotDetailScreen() {
           />
           <Text style={[styles.saveButtonText, displaySaved && styles.saveButtonTextSaved]}>
             {!hydrated
-              ? '正在读取想拍清单'
+              ? syncError ? '想拍清单同步异常' : '正在读取想拍清单'
               : displaySaved
                 ? '已加入想拍清单'
                 : '加入想拍清单'}

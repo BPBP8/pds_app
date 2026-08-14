@@ -1,15 +1,19 @@
-import React, { useState, useMemo } from 'react';
-import { StyleSheet, View, Text, ScrollView, ImageBackground, TouchableOpacity, Image, Dimensions, Alert, Pressable, TextInput } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, View, Text, ScrollView, ImageBackground, TouchableOpacity, Image, Pressable, TextInput } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import * as ImagePicker from 'expo-image-picker';
+import { useAppPreferences, type DeviceKind } from '@/src/app-preferences-context';
+import { useAuth } from '@/src/auth-context';
+import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestore';
+import { db } from '@/src/config/firebase';
 
-const { width } = Dimensions.get('window');
 const itemWidth = '48%';
 
 // Enhanced Mock Data with more models across categories
 const TOPIC_DATA: any = {
+  '手机通用拍摄': { brand: '通用', price: 0, title: '用好你现在的手机', subtitle: '先发挥主摄优势，再按场景决定是否升级', coverImage: 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=1000', tags: ['随手拍', '主摄优先', '轻便'], specs: { suitableFor: '旅行、美食、宠物和日常记录', focus: '优先用主摄、擦净镜头并保持画面稳定', price: '无需新增设备' }, reviews: [{ user: '编辑建议', text: '先把手里的手机拍明白，再为明确需求换设备', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=800' }] },
+  '长焦手机拍摄': { brand: '通用', price: 0, title: '带长焦的手机', subtitle: '适合人像、远景和不便靠近的拍摄场景', coverImage: 'https://images.unsplash.com/photo-1511746015383-02f897ff02aa9?w=1000', tags: ['长焦', '人像', '远景'], specs: { suitableFor: '旅行地标、人像、舞台与宠物', focus: '重点比较等效焦段、防抖和暗光画质', price: '按预算选择具体型号' }, reviews: [{ user: '编辑建议', text: '长焦不是越远越好，常用焦段和稳定性更重要', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1506157786151-b8491531f063?w=800' }] },
   'Sony A7M4': { brand: 'Sony', price: 16999, title: 'Sony Alpha 7 IV', subtitle: '全画幅基准，全能无反', coverImage: 'https://images.unsplash.com/photo-1516961642265-531546e84af2?w=1000', tags: ['全画幅', '3300万像素', '对焦之神'], specs: { sensor: '3300万全画幅', mount: 'Sony E卡口', price: '约 16,999 RMB' }, reviews: [{ user: '摄影老怪', text: '对焦快准狠，绝对的基准级产品', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1542038784456-1ea8e935640e?w=800' }, { url: 'https://images.unsplash.com/photo-1521911961916-b8fd6a2e2d09?w=800' }] },
   'Fujifilm X100V': { brand: 'Fujifilm', price: 10000, title: 'Fujifilm X100V', subtitle: '原汁原味的街头摄影与复古色彩', coverImage: 'https://images.unsplash.com/photo-1589802875323-2287fdd1bfba?w=1000', tags: ['APS-C', '复古旁轴', '胶片模拟'], specs: { sensor: '2610万像素 APS-C', lens: '23mm f/2', price: '约 10,000 RMB' }, reviews: [{ user: 'StreetWalker', text: 'Classic Negative 太绝了', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1493246507139-91e8fad9978e?w=800' }] },
   'Nikon Z8': { brand: 'Nikon', price: 27999, title: 'Nikon Z8', subtitle: '小旗舰，全能生产力工具', coverImage: 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=1000', tags: ['旗舰级', '4500万像素', '8K录制'], specs: { sensor: '4571万堆栈式全画幅', mount: 'Nikon Z', price: '约 27,999 RMB' }, reviews: [{ user: 'Z-Fan', text: '对焦提升太明显了，手感极佳', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1502920917128-1aa500764cbd?w=800' }] },
@@ -19,24 +23,99 @@ const TOPIC_DATA: any = {
   'vivo X100 Ultra': { brand: 'vivo', price: 6499, title: 'vivo X100 Ultra', subtitle: '蓝图影像，旗舰之王', coverImage: 'https://images.unsplash.com/photo-1582216260271-eade858fdfb2?w=1000', tags: ['蔡司', '2亿长焦', '演唱会必备'], specs: { sensor: '一英寸 LYT-900', lens: '2亿像素潜望长焦', price: '约 6,499 RMB' }, reviews: [{ user: 'LiveFan', text: '长焦清晰度简直是离大谱，太强了', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1505236858219-8359eb29e325?w=800' }] },
   'iPhone 15 Pro Max': { brand: 'Apple', price: 9999, title: 'iPhone 15 Pro Max', subtitle: '5倍光学变焦，专业创作平台', coverImage: 'https://images.unsplash.com/photo-1695048133142-1a20484d2569?w=1000', tags: ['ProRes', 'Log', '随身便携'], specs: { sensor: '4800万像素', lens: '13/24/120mm', price: '约 9,999 RMB' }, reviews: [{ user: 'FilmBoy', text: '视频能力的断层式领先', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1472214103451-9374bd1c798e?w=800' }] },
   'OPPO Find X7 Ultra': { brand: 'OPPO', price: 5999, title: 'OPPO Find X7 Ultra', subtitle: '双潜望长焦，哈苏影调', coverImage: 'https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?w=1000', tags: ['哈苏', '双潜望', '超光影'], specs: { sensor: '一英寸 LYT-900', lens: '双潜望四主摄', price: '约 5,999 RMB' }, reviews: [{ user: 'Hasselblad', text: '人像影调很有高级感', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1517436073-3b1b116130cb?w=800' }] },
-  'Panasonic S5II': { brand: 'Panasonic', price: 11000, title: 'Panasonic S5II', subtitle: '视频神器，相位对焦进化', coverImage: 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=1000', tags: ['全画幅', 'L卡口', '视频旗舰'], specs: { sensor: '2420万全画幅', AF: '相位对焦', price: '约 11,000 RMB' }, reviews: [{ user: 'Vlogger', text: '终于有相位对焦了，松下永远的神', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1502920917128-1aa500764cbd?w=800' }] }
+  'Panasonic S5II': { brand: 'Panasonic', price: 11000, title: 'Panasonic S5II', subtitle: '视频神器，相位对焦进化', coverImage: 'https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=1000', tags: ['全画幅', 'L卡口', '视频旗舰'], specs: { sensor: '2420万全画幅', AF: '相位对焦', price: '约 11,000 RMB' }, reviews: [{ user: '编辑建议', text: '适合同时重视照片和视频的用户', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1502920917128-1aa500764cbd?w=800' }] },
+  'DJI Osmo Action': { brand: 'DJI', price: 2499, title: 'DJI Osmo Action 系列', subtitle: '适合第一视角、骑行和户外记录', coverImage: 'https://images.unsplash.com/photo-1526506118085-60ce8714f8c5?w=1000', tags: ['防抖', '超广角', '户外'], specs: { suitableFor: '骑行、徒步、水边与第一视角', focus: '优先比较防抖、续航和配件生态', price: '主流运动相机价位' }, reviews: [{ user: '编辑建议', text: '先确认使用场景，再决定是否需要更多配件', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1530137073520-4ea6e2f10a48?w=800' }] },
+  'Insta360 X Series': { brand: 'Insta360', price: 3499, title: 'Insta360 X 系列', subtitle: '先拍后取景，适合旅行与运动视角', coverImage: 'https://images.unsplash.com/photo-1486911278844-a81c5267e227?w=1000', tags: ['全景', '隐形自拍杆', '旅行'], specs: { suitableFor: '旅行记录、滑雪、骑行和多人同行', focus: '优先考虑后期流程与存储空间', price: '主流全景相机价位' }, reviews: [{ user: '编辑建议', text: '全景素材自由度高，但需要预留后期时间', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1486911278844-a81c5267e227?w=800' }] },
+  'DJI Mini Series': { brand: 'DJI', price: 4599, title: 'DJI Mini 系列', subtitle: '轻量航拍入门，旅行携带压力更小', coverImage: 'https://images.unsplash.com/photo-1473968512647-3e447244af8f?w=1000', tags: ['轻量', '航拍', '旅行'], specs: { suitableFor: '旅行风光、城市建立镜头与俯拍构图', focus: '先核实禁飞区、登记与当地规定', price: '入门航拍价位' }, reviews: [{ user: '编辑建议', text: '购买前先确认常去地点是否允许飞行', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1508614589041-895b88991e3e?w=800' }] },
+  'DJI Air Series': { brand: 'DJI', price: 6999, title: 'DJI Air 系列', subtitle: '更重视画质、长焦和抗风能力', coverImage: 'https://images.unsplash.com/photo-1506947411487-a56738267384?w=1000', tags: ['双焦段', '风光', '进阶'], specs: { suitableFor: '进阶风光、远近景切换与商业素材', focus: '在画质、重量与飞行规定之间取舍', price: '进阶航拍价位' }, reviews: [{ user: '编辑建议', text: '适合已经明确需要更高画质的航拍用户', rating: 5 }], samples: [{ url: 'https://images.unsplash.com/photo-1506947411487-a56738267384?w=800' }] }
 };
 
-const BRANDS = ['全部', 'Sony', 'Fujifilm', 'Canon', 'Nikon', 'Leica', 'Panasonic', 'Apple', 'Xiaomi', 'vivo', 'OPPO'];
+const EQUIPMENT_KIND: Record<string, DeviceKind> = {
+  '手机通用拍摄': 'phone',
+  '长焦手机拍摄': 'phone',
+  'Sony A7M4': 'camera',
+  'Fujifilm X100V': 'camera',
+  'Nikon Z8': 'camera',
+  'Leica Q3': 'camera',
+  'Canon R5': 'camera',
+  'Panasonic S5II': 'camera',
+  'Xiaomi 14 Ultra': 'phone',
+  'vivo X100 Ultra': 'phone',
+  'iPhone 15 Pro Max': 'phone',
+  'OPPO Find X7 Ultra': 'phone',
+  'DJI Osmo Action': 'action',
+  'Insta360 X Series': 'action',
+  'DJI Mini Series': 'drone',
+  'DJI Air Series': 'drone',
+};
+
+const DEFAULT_EQUIPMENT: Record<string, string> = {
+  'this-phone': '手机通用拍摄',
+  'pro-phone': '长焦手机拍摄',
+  mirrorless: 'Sony A7M4',
+  'action-camera': 'DJI Osmo Action',
+  drone: 'DJI Mini Series',
+};
+
+const BRANDS = ['全部', '通用', 'Sony', 'Fujifilm', 'Canon', 'Nikon', 'Leica', 'Panasonic', 'Apple', 'Xiaomi', 'vivo', 'OPPO', 'DJI', 'Insta360'];
 const PRICE_RANGES = ['全部', '5千以内', '5千-1万', '1万-2万', '2万以上'];
 
 type TabType = 'gear' | 'qa';
 
+type QuestionPreview = { id: string; q: string; answers: number };
+
+const normalizeQuestionPreview = (id: string, value: unknown): QuestionPreview => {
+  const data = typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const title = typeof data.title === 'string' ? data.title.trim().slice(0, 100) : '';
+  const answers = typeof data.answersCount === 'number' && Number.isFinite(data.answersCount)
+    ? Math.max(0, Math.floor(data.answersCount))
+    : 0;
+  return { id, q: title || '未命名问题', answers };
+};
+
+const CURATED_QUESTIONS: QuestionPreview[] = [
+  { id: 'qa1', q: '预算1万5，想入手一台拍人像为主的相机，有什么推荐？', answers: 12 },
+  { id: 'qa2', q: 'Sony A7M4 和 Canon R6 Mark II 怎么选？', answers: 8 },
+  { id: 'qa3', q: '手机拍照和相机拍照差别大吗？', answers: 23 },
+];
+
 export default function GuidesScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { device, deviceId } = useAppPreferences();
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('gear');
-  const [activeEquip, setActiveEquip] = useState('Sony A7M4');
+  const [activeEquip, setActiveEquip] = useState(DEFAULT_EQUIPMENT[deviceId] ?? 'Sony A7M4');
   const [specsModalVisible, setSpecsModalVisible] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [searchText, setSearchText] = useState('');
   const [activeBrand, setActiveBrand] = useState('全部');
   const [activePrice, setActivePrice] = useState('全部');
+  const [onlyForMyDevice, setOnlyForMyDevice] = useState(true);
+  const [questions, setQuestions] = useState<QuestionPreview[]>(CURATED_QUESTIONS);
+
+  useEffect(() => {
+    const questionsQuery = query(
+      collection(db, 'questions'),
+      orderBy('createdAt', 'desc'),
+      limit(3),
+    );
+    return onSnapshot(
+      questionsQuery,
+      (snapshot) => {
+        if (snapshot.empty) {
+          setQuestions(CURATED_QUESTIONS);
+          return;
+        }
+        setQuestions(snapshot.docs.map((questionDoc) =>
+          normalizeQuestionPreview(questionDoc.id, questionDoc.data()),
+        ));
+      },
+      () => setQuestions(CURATED_QUESTIONS),
+    );
+  }, []);
 
   // Unified global filtering logic
   const filteredEquipment = useMemo(() => {
@@ -45,12 +124,7 @@ export default function GuidesScreen() {
       const matchesSearch = item.title.toLowerCase().includes(searchText.toLowerCase()) ||
                            item.brand.toLowerCase().includes(searchText.toLowerCase()) ||
                            key.toLowerCase().includes(searchText.toLowerCase());
-
-      // If searching, show all global matches. Otherwise apply filters.
-      if (searchText.length > 0) {
-        return matchesSearch;
-      }
-
+      const matchesDevice = !onlyForMyDevice || EQUIPMENT_KIND[key] === device.kind;
       const matchesBrand = activeBrand === '全部' || item.brand === activeBrand;
       let matchesPrice = true;
       if (activePrice === '5千以内') matchesPrice = item.price < 5000;
@@ -58,14 +132,37 @@ export default function GuidesScreen() {
       else if (activePrice === '1万-2万') matchesPrice = item.price > 10000 && item.price <= 20000;
       else if (activePrice === '2万以上') matchesPrice = item.price > 20000;
 
-      return matchesBrand && matchesPrice;
+      return matchesSearch && matchesDevice && matchesBrand && matchesPrice;
     });
-  }, [searchText, activeBrand, activePrice]);
+  }, [activeBrand, activePrice, device.kind, onlyForMyDevice, searchText]);
 
-  const currentData = TOPIC_DATA[activeEquip] || (filteredEquipment.length > 0 ? TOPIC_DATA[filteredEquipment[0]] : TOPIC_DATA['Sony A7M4']);
+  useEffect(() => {
+    setSpecsModalVisible(false);
+    setOnlyForMyDevice(true);
+    setActiveBrand('全部');
+    setActivePrice('全部');
+    setSearchText('');
+    setActiveEquip(DEFAULT_EQUIPMENT[deviceId] ?? 'Sony A7M4');
+  }, [deviceId]);
+
+  useEffect(() => {
+    if (filteredEquipment.length > 0 && !filteredEquipment.includes(activeEquip)) {
+      setActiveEquip(filteredEquipment[0]);
+    }
+  }, [activeEquip, filteredEquipment]);
+
+  const currentData = filteredEquipment.includes(activeEquip) ? TOPIC_DATA[activeEquip] : null;
 
   const pickImage = () => {
-    router.push('/modal');
+    const selectedDeviceName = currentData?.title ?? device.name;
+    if (user) {
+      router.push({ pathname: '/modal' as never, params: { deviceName: selectedDeviceName } });
+    } else {
+      router.push({
+        pathname: '/auth' as never,
+        params: { returnTo: '/modal', deviceName: selectedDeviceName },
+      });
+    }
   };
 
   return (
@@ -105,6 +202,21 @@ export default function GuidesScreen() {
             </View>
           </View>
 
+          <View style={styles.personalizationRow}>
+            <View style={styles.personalizationCopy}>
+              <Text style={styles.personalizationLabel}>按你的常用设备</Text>
+              <Text style={styles.personalizationDevice}>{device.name}</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.scopeButton, !onlyForMyDevice && styles.scopeButtonAll]}
+              onPress={() => setOnlyForMyDevice((value) => !value)}
+            >
+              <Text style={[styles.scopeButtonText, !onlyForMyDevice && styles.scopeButtonTextAll]}>
+                {onlyForMyDevice ? '适合我的' : '全部器材'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Brand Filter - Horizontal Scroll */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterContent}>
             {BRANDS.map(brand => (
@@ -134,7 +246,7 @@ export default function GuidesScreen() {
           </ScrollView>
         </View>
 
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+        {currentData ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
         {/* Cover Hero Area */}
         <View style={styles.heroWrapper}>
           <ImageBackground source={{ uri: currentData.coverImage }} style={styles.heroImage} imageStyle={{ borderRadius: 20 }}>
@@ -158,7 +270,7 @@ export default function GuidesScreen() {
 
         {/* Equipment Reviews */}
         <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}><IconSymbol name="sparkles" size={16} color="#FF2D55" /><Text style={styles.sectionTitle}>真实短评</Text></View>
+          <View style={styles.sectionHeader}><IconSymbol name="sparkles" size={16} color="#D85331" /><Text style={styles.sectionTitle}>使用建议</Text></View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.reviewsScroll} contentContainerStyle={{ paddingHorizontal: 15 }}>
             {currentData.reviews.map((r: any, i: number) => (
               <View key={i} style={styles.reviewCard}>
@@ -180,7 +292,7 @@ export default function GuidesScreen() {
 
         {/* Gallery Grid */}
         <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}><IconSymbol name="camera.fill" size={16} color="#FFF" /><Text style={styles.sectionTitle}>精选样张</Text></View>
+          <View style={styles.sectionHeader}><IconSymbol name="camera.fill" size={16} color="#D85331" /><Text style={styles.sectionTitle}>适合场景示意</Text></View>
           <View style={styles.galleryGrid}>
             {currentData.samples.map((img: any, i: number) => (
               <TouchableOpacity key={i} style={[styles.galleryItemWrapper, { width: itemWidth }]} onPress={() => setFullscreenImage(img.url)}>
@@ -189,7 +301,16 @@ export default function GuidesScreen() {
             ))}
           </View>
         </View>
-      </ScrollView>
+      </ScrollView> : (
+        <View style={styles.emptyEquipment}>
+          <View style={styles.emptyEquipmentIcon}><IconSymbol name="camera.fill" size={26} color="#D85331" /></View>
+          <Text style={styles.emptyEquipmentTitle}>没有符合当前条件的器材</Text>
+          <Text style={styles.emptyEquipmentBody}>清除品牌、价格或搜索条件后再看看。</Text>
+          <TouchableOpacity style={styles.emptyEquipmentButton} onPress={() => { setActiveBrand('全部'); setActivePrice('全部'); setSearchText(''); }}>
+            <Text style={styles.emptyEquipmentButtonText}>清除筛选</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       </>
       ) : null}
 
@@ -201,18 +322,20 @@ export default function GuidesScreen() {
             <Text style={styles.qaSubtitle}>提出你的器材问题，获得社区建议</Text>
           </View>
 
-          <TouchableOpacity style={styles.askButton} onPress={() => router.push('/questions')}>
+          <TouchableOpacity
+            style={styles.askButton}
+            onPress={() => {
+              if (user) router.push('/ask-question');
+              else router.push({ pathname: '/auth' as never, params: { returnTo: '/ask-question' } });
+            }}
+          >
             <IconSymbol name="plus" size={20} color="#FFF" />
             <Text style={styles.askButtonText}>发布问题</Text>
           </TouchableOpacity>
 
           <View style={styles.questionsList}>
             <Text style={styles.questionsTitle}>热门问题</Text>
-            {[
-              { id: 'qa1', q: '预算1万5，想入手一台拍人像为主的相机，有什么推荐？', answers: 12 },
-              { id: 'qa2', q: 'Sony A7M4 和 Canon R6 Mark II 怎么选？', answers: 8 },
-              { id: 'qa3', q: '手机拍照和相机拍照差别大吗？', answers: 23 },
-            ].map((item) => (
+            {questions.map((item) => (
               <TouchableOpacity
                 key={item.id}
                 style={styles.questionCard}
@@ -222,6 +345,10 @@ export default function GuidesScreen() {
                 <Text style={styles.answersCount}>{item.answers} 回答</Text>
               </TouchableOpacity>
             ))}
+            <TouchableOpacity style={styles.allQuestionsButton} onPress={() => router.push('/(tabs)/questions')}>
+              <Text style={styles.allQuestionsText}>查看全部问答</Text>
+              <IconSymbol name="chevron.right" size={18} color="#D85331" />
+            </TouchableOpacity>
           </View>
         </ScrollView>
       )}
@@ -234,7 +361,7 @@ export default function GuidesScreen() {
       )}
 
       {/* Specs Overlay - Fixed to stay within phone frame */}
-      {specsModalVisible && (
+      {specsModalVisible && currentData && (
          <View style={[StyleSheet.absoluteFill, styles.specsModalOverlay]}>
             <Pressable style={StyleSheet.absoluteFill} onPress={() => setSpecsModalVisible(false)} />
             <View style={styles.specsModalContent}>
@@ -281,6 +408,14 @@ const styles = StyleSheet.create({
     color: '#FF2D55',
   },
   headerContainer: { backgroundColor: '#FFFFFF', zIndex: 100 },
+  personalizationRow: { marginHorizontal: 15, marginBottom: 8, padding: 12, borderRadius: 14, backgroundColor: '#FFF0E9', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  personalizationCopy: { flex: 1 },
+  personalizationLabel: { color: '#A86450', fontSize: 9, fontWeight: '800' },
+  personalizationDevice: { marginTop: 2, color: '#4B3630', fontSize: 13, fontWeight: '900' },
+  scopeButton: { borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#D85331' },
+  scopeButtonAll: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8C6B9' },
+  scopeButtonText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
+  scopeButtonTextAll: { color: '#B64B31' },
   headerTop: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 10 },
   pageTitle: { fontSize: 24, fontWeight: '900', color: '#1D1D1F', letterSpacing: -0.5 },
   searchBar: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F5F7', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginLeft: 15 },
@@ -323,6 +458,12 @@ const styles = StyleSheet.create({
   inlineUploadWrapper: { paddingHorizontal: 15, marginVertical: 15 },
   inlineUploadButton: { backgroundColor: '#1D1D1F', flexDirection: 'row', paddingVertical: 14, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   inlineUploadText: { color: '#FFF', fontWeight: 'bold', fontSize: 14, marginLeft: 8 },
+  emptyEquipment: { flex: 1, minHeight: 360, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 },
+  emptyEquipmentIcon: { width: 58, height: 58, borderRadius: 20, backgroundColor: '#FFF0E9', alignItems: 'center', justifyContent: 'center' },
+  emptyEquipmentTitle: { marginTop: 14, color: '#332E30', fontSize: 16, fontWeight: '900' },
+  emptyEquipmentBody: { marginTop: 6, color: '#8D8588', fontSize: 12, textAlign: 'center' },
+  emptyEquipmentButton: { marginTop: 16, borderRadius: 13, paddingHorizontal: 18, paddingVertical: 10, backgroundColor: '#D85331' },
+  emptyEquipmentButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
   fullscreenModal: { backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center', zIndex: 2000 },
   fullscreenImage: { width: '100%', height: '80%' },
   specsModalOverlay: { backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end', zIndex: 2000 },
@@ -345,4 +486,17 @@ const styles = StyleSheet.create({
   questionCard: { backgroundColor: '#F8F8F8', borderRadius: 16, padding: 16, marginBottom: 12 },
   questionText: { fontSize: 15, color: '#1D1D1F', lineHeight: 22, marginBottom: 10 },
   answersCount: { fontSize: 13, color: '#FF6B6B', fontWeight: '600' },
+  allQuestionsButton: {
+    minHeight: 46,
+    marginTop: 4,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#F0D7CE',
+    backgroundColor: '#FFF8F5',
+  },
+  allQuestionsText: { color: '#D85331', fontSize: 14, fontWeight: '800' },
 });

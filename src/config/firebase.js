@@ -1,7 +1,8 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getApps, initializeApp } from 'firebase/app';
+import { getAuth, initializeAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import { Platform } from 'react-native';
 
 // Your web app's Firebase configuration
 // IMPORTANT: Replace these with your actual Firebase config object from Firebase Console
@@ -15,10 +16,29 @@ const firebaseConfig = {
     measurementId: "G-TQWBPKKWST"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+const app = getApps()[0] ?? initializeApp(firebaseConfig);
+
+let authInstance;
+if (Platform.OS === 'web') {
+    authInstance = getAuth(app);
+} else {
+    try {
+        // Metro resolves the React Native Firebase Auth entry, which exposes
+        // the AsyncStorage adapter even though the browser entry does not.
+        const { getReactNativePersistence } = require('firebase/auth');
+        authInstance = initializeAuth(app, {
+            persistence: getReactNativePersistence(AsyncStorage),
+        });
+    } catch (error) {
+        // Fast refresh can evaluate this module after Auth already exists.
+        if (error?.code === 'auth/already-initialized') {
+            authInstance = getAuth(app);
+        } else {
+            throw error;
+        }
+    }
+}
 
 // Initialize Firebase services
-export const auth = getAuth(app);
+export const auth = authInstance;
 export const db = getFirestore(app);
-export const storage = getStorage(app);

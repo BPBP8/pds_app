@@ -93,7 +93,7 @@ export default function TutorialDetailScreen() {
                     // Fallback to mock data
                     setTutorial(MOCK_TUTORIAL);
                 }
-            } catch (e) {
+            } catch {
                 setTutorial(MOCK_TUTORIAL);
             } finally {
                 setLoading(false);

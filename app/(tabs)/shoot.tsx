@@ -1,7 +1,18 @@
 import { useRouter } from 'expo-router';
-import { collection, doc, increment, onSnapshot, orderBy, query, updateDoc } from 'firebase/firestore';
-import { useEffect, useMemo, useState } from 'react';
 import {
+  collection,
+  doc,
+  increment,
+  limit,
+  onSnapshot,
+  orderBy,
+  query,
+  runTransaction,
+  serverTimestamp,
+} from 'firebase/firestore';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
   Image,
   Modal,
   Pressable,
@@ -15,9 +26,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useAppPreferences } from '@/src/app-preferences-context';
+import { useAuth } from '@/src/auth-context';
 import { db } from '@/src/config/firebase';
 import { SEED_POSTS, type SeedCategory, type SeedPost } from '@/src/data/seed-posts';
 import { formatDistance } from '@/src/distance';
+import { shouldRequestLoginForBrowse } from '@/src/guest-engagement';
 import { useOnboardingTour, useTourTarget } from '@/src/onboarding-tour-context';
 import { useSavedShots } from '@/src/saved-shots-context';
 
@@ -25,14 +38,43 @@ type Filter = '全部' | SeedCategory;
 
 type RemotePost = {
   id: string;
-  imageUrl?: string;
-  imageUrls?: string[];
-  title?: string;
-  userId?: string;
-  likes?: number;
-  motivation?: string;
-  notes?: string;
-  params?: Record<string, string>;
+  imageUrl: string;
+  title: string;
+  userId: string;
+  likes: number;
+  motivation: string;
+  notes: string;
+  params: Record<string, string>;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const normalizeRemotePost = (id: string, value: unknown): RemotePost | null => {
+  if (!isRecord(value)) return null;
+  const imageUrl = typeof value.imageUrl === 'string' ? value.imageUrl : '';
+  const title = typeof value.title === 'string' ? value.title.trim() : '';
+  const userId = typeof value.userId === 'string' ? value.userId : '';
+  if (!imageUrl.startsWith('data:image/jpeg;base64,') || !title || !userId) return null;
+
+  const rawParams = isRecord(value.params) ? value.params : {};
+  const params = Object.fromEntries(
+    Object.entries(rawParams).filter((entry): entry is [string, string] =>
+      typeof entry[1] === 'string' && entry[1].length <= 100),
+  );
+
+  return {
+    id,
+    imageUrl,
+    title: title.slice(0, 40),
+    userId,
+    likes: typeof value.likes === 'number' && Number.isFinite(value.likes)
+      ? Math.max(0, Math.floor(value.likes))
+      : 0,
+    motivation: typeof value.motivation === 'string' ? value.motivation.slice(0, 20) : '',
+    notes: typeof value.notes === 'string' ? value.notes.slice(0, 500) : '',
+    params,
+  };
 };
 
 const FILTERS: readonly Filter[] = ['全部', '旅行', '人像', '美食', '宠物'];
@@ -43,6 +85,7 @@ const compactNumber = (value: number) =>
 export default function ShootScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
   const {
     city,
     coordinates,
@@ -53,30 +96,40 @@ export default function ShootScreen() {
   const {
     active: tourActive,
     categoryOverride,
+    postId: tourPostId,
     startTour,
   } = useOnboardingTour();
-  const filterTourTarget = useTourTarget('shoot-category');
-  const featureTourTarget = useTourTarget('shoot-featured-post');
+  const scrollRef = useRef<ScrollView>(null);
+  const featureSectionYRef = useRef(0);
+  const filterTourTarget = useTourTarget('shoot-category', {
+    prepare: () => scrollRef.current?.scrollTo({ y: 0, animated: false }),
+  });
+  const featureTourTarget = useTourTarget('shoot-featured-post', {
+    prepare: () => scrollRef.current?.scrollTo({
+      y: Math.max(0, featureSectionYRef.current + 160),
+      animated: false,
+    }),
+  });
   const { isSaved } = useSavedShots();
 
   const [selectedFilter, setSelectedFilter] = useState<Filter>('全部');
   const [remotePosts, setRemotePosts] = useState<RemotePost[]>([]);
+  const [remotePostsError, setRemotePostsError] = useState('');
   const [likedPosts, setLikedPosts] = useState<Record<string, boolean>>({});
   const [cityPickerVisible, setCityPickerVisible] = useState(false);
 
   useEffect(() => {
-    const postsQuery = query(collection(db, 'posts'), orderBy('createdAt', 'desc'));
+    const postsQuery = query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(20));
     return onSnapshot(
       postsQuery,
       (snapshot) => {
-        setRemotePosts(
-          snapshot.docs.map((snapshotDoc) => ({
-            id: snapshotDoc.id,
-            ...(snapshotDoc.data() as Omit<RemotePost, 'id'>),
-          })),
-        );
+        setRemotePostsError('');
+        setRemotePosts(snapshot.docs.flatMap((snapshotDoc) => {
+          const normalized = normalizeRemotePost(snapshotDoc.id, snapshotDoc.data());
+          return normalized ? [normalized] : [];
+        }));
       },
-      () => setRemotePosts([]),
+      () => setRemotePostsError('暂时无法读取新作品，请稍后重试。'),
     );
   }, []);
 
@@ -93,35 +146,70 @@ export default function ShootScreen() {
         ? [...SEED_POSTS]
         : SEED_POSTS.filter((post) => post.category === displayedFilter);
 
-    return posts.sort((left, right) => {
+    const sortedPosts = posts.sort((left, right) => {
       const leftMatches = left.deviceKinds.includes(device.kind) ? 1 : 0;
       const rightMatches = right.deviceKinds.includes(device.kind) ? 1 : 0;
       if (leftMatches !== rightMatches) return rightMatches - leftMatches;
       if (Boolean(left.featured) !== Boolean(right.featured)) return left.featured ? -1 : 1;
       return right.likes - left.likes;
     });
-  }, [device.kind, displayedFilter]);
+
+    if (tourActive) {
+      const tourPostIndex = sortedPosts.findIndex((post) => post.id === tourPostId);
+      if (tourPostIndex > 0) {
+        const [tourPost] = sortedPosts.splice(tourPostIndex, 1);
+        sortedPosts.unshift(tourPost);
+      }
+    }
+    return sortedPosts;
+  }, [device.kind, displayedFilter, tourActive, tourPostId]);
 
   const featurePost = visibleSeedPosts[0];
   const gridPosts = visibleSeedPosts.slice(1);
 
-  const openSeedPost = (post: SeedPost) => {
+  const openSeedPost = async (post: SeedPost) => {
+    const returnTo = `/shot/${post.id}`;
+    if (!user && await shouldRequestLoginForBrowse()) {
+      router.push({ pathname: '/auth' as never, params: { returnTo } });
+      return;
+    }
     router.push({ pathname: '/shot/[id]', params: { id: post.id } });
   };
 
-  const openRemotePost = (post: RemotePost) => {
+  const openRemotePost = async (post: RemotePost) => {
+    const returnTo = `/post/${post.id}`;
+    if (!user && await shouldRequestLoginForBrowse()) {
+      router.push({ pathname: '/auth' as never, params: { returnTo } });
+      return;
+    }
     router.push({ pathname: '/post/[id]', params: { id: post.id } });
   };
 
   const likePost = async (id: string, source: 'seed' | 'remote') => {
+    if (!user) {
+      router.push({ pathname: '/auth' as never, params: { returnTo: '/(tabs)/shoot' } });
+      return;
+    }
     if (likedPosts[id]) return;
     setLikedPosts((current) => ({ ...current, [id]: true }));
 
     if (source === 'remote') {
       try {
-        await updateDoc(doc(db, 'posts', id), { likes: increment(1) });
+        await runTransaction(db, async (transaction) => {
+          const postRef = doc(db, 'posts', id);
+          const likeRef = doc(db, 'posts', id, 'likes', user.uid);
+          const existingLike = await transaction.get(likeRef);
+          if (existingLike.exists()) return;
+
+          transaction.set(likeRef, {
+            userId: user.uid,
+            createdAt: serverTimestamp(),
+          });
+          transaction.update(postRef, { likes: increment(1) });
+        });
       } catch {
         setLikedPosts((current) => ({ ...current, [id]: false }));
+        Alert.alert('暂时无法点赞', '网络或账号同步失败，请稍后重试。');
       }
     }
   };
@@ -143,6 +231,7 @@ export default function ShootScreen() {
   return (
     <View style={styles.container}>
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[
           styles.scrollContent,
@@ -206,7 +295,12 @@ export default function ShootScreen() {
         </View>
 
         {featurePost ? (
-          <View style={styles.featureSection}>
+          <View
+            style={styles.featureSection}
+            onLayout={(event) => {
+              featureSectionYRef.current = event.nativeEvent.layout.y;
+            }}
+          >
             <View style={styles.sectionHeading}>
               <View>
                 <Text style={styles.sectionEyebrow}>北京今日灵感</Text>
@@ -223,7 +317,7 @@ export default function ShootScreen() {
             <TouchableOpacity
               style={styles.featureCard}
               activeOpacity={0.94}
-              onPress={() => openSeedPost(featurePost)}
+              onPress={() => void openSeedPost(featurePost)}
             >
               <Image
                 source={featurePost.image.source}
@@ -284,7 +378,7 @@ export default function ShootScreen() {
                 const liked = Boolean(likedPosts[post.id]);
                 return (
                   <View key={post.id} style={styles.gridCard}>
-                    <TouchableOpacity activeOpacity={0.94} onPress={() => openSeedPost(post)}>
+                    <TouchableOpacity activeOpacity={0.94} onPress={() => void openSeedPost(post)}>
                       <View>
                         <Image
                           source={post.image.source}
@@ -332,7 +426,7 @@ export default function ShootScreen() {
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.wantButton}
-                          onPress={() => openSeedPost(post)}
+                          onPress={() => void openSeedPost(post)}
                           accessibilityLabel={`查看拍法：${post.title}`}
                         >
                           <Text style={styles.wantButtonText}>查看拍法</Text>
@@ -346,7 +440,14 @@ export default function ShootScreen() {
           </View>
         ) : null}
 
-        {remotePosts.some((post) => post.imageUrl || post.imageUrls?.[0]) ? (
+        {remotePostsError ? (
+          <View style={styles.remoteErrorCard}>
+            <IconSymbol name="exclamationmark.triangle.fill" size={17} color="#B14D32" />
+            <Text style={styles.remoteErrorText}>{remotePostsError}</Text>
+          </View>
+        ) : null}
+
+        {remotePosts.length > 0 ? (
           <View style={styles.communitySection}>
             <View style={styles.sectionHeading}>
               <View>
@@ -355,7 +456,6 @@ export default function ShootScreen() {
               </View>
             </View>
             {remotePosts
-              .filter((post) => post.imageUrl || post.imageUrls?.[0])
               .slice(0, 4)
               .map((post) => {
                 const liked = Boolean(likedPosts[post.id]);
@@ -364,10 +464,10 @@ export default function ShootScreen() {
                     key={post.id}
                     style={styles.remoteCard}
                     activeOpacity={0.9}
-                    onPress={() => openRemotePost(post)}
+                    onPress={() => void openRemotePost(post)}
                   >
                     <Image
-                      source={{ uri: post.imageUrl || post.imageUrls?.[0] }}
+                      source={{ uri: post.imageUrl }}
                       style={styles.remoteImage}
                       resizeMode="cover"
                     />
@@ -612,6 +712,17 @@ const styles = StyleSheet.create({
   heartCountActive: { color: '#E85A3A' },
   wantButton: { paddingHorizontal: 10, paddingVertical: 7, borderRadius: 12, backgroundColor: '#FFF0E9' },
   wantButtonText: { color: '#C94B2D', fontSize: 9, fontWeight: '900' },
+  remoteErrorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 26,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 15,
+    backgroundColor: '#FFF0E9',
+  },
+  remoteErrorText: { flex: 1, color: '#8A3D2A', fontSize: 11, lineHeight: 17, fontWeight: '700' },
   communitySection: { marginTop: 30 },
   remoteCard: {
     flexDirection: 'row',

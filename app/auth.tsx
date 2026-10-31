@@ -29,7 +29,7 @@ const RETURN_ROUTES = new Set(['/modal', '/ask-question', '/(tabs)/profile', '/(
 export default function AuthScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ returnTo?: string; deviceName?: string }>();
+  const params = useLocalSearchParams<{ returnTo?: string; deviceName?: string; sourceId?: string; scene?: string }>();
   const { user, loading, signIn, register, resetPassword } = useAuth();
   const [mode, setMode] = useState<Mode>('sign-in');
   const [displayName, setDisplayName] = useState('');
@@ -42,7 +42,7 @@ export default function AuthScreen() {
   const returnTo = useMemo(() => {
     const requested = Array.isArray(params.returnTo) ? params.returnTo[0] : params.returnTo;
     const isSafeDetail = requested
-      && (requested.startsWith('/shot/') || requested.startsWith('/post/') || requested.startsWith('/question/'))
+      && (requested.startsWith('/shot/') || requested.startsWith('/post/') || requested.startsWith('/question/') || requested.startsWith('/shooting/'))
       && !requested.includes('..');
     return requested && (RETURN_ROUTES.has(requested) || isSafeDetail)
       ? requested
@@ -56,15 +56,15 @@ export default function AuthScreen() {
 
   useEffect(() => {
     if (loading || !user) return;
-    if (returnTo === '/modal' && requestedDeviceName) {
+    if ((returnTo === '/modal' || returnTo === '/ask-question') && (requestedDeviceName || params.sourceId)) {
       router.replace({
-        pathname: '/modal' as never,
-        params: { deviceName: requestedDeviceName },
+        pathname: returnTo as never,
+        params: { deviceName: requestedDeviceName, sourceId: String(params.sourceId ?? ''), scene: String(params.scene ?? '').slice(0,40) },
       });
       return;
     }
     router.replace(returnTo as never);
-  }, [loading, requestedDeviceName, returnTo, router, user]);
+  }, [loading, params.scene, params.sourceId, requestedDeviceName, returnTo, router, user]);
 
   const submit = async () => {
     setError('');

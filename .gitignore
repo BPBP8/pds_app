@@ -2,10 +2,13 @@
 
 # dependencies
 node_modules/
+.npm-cache/
 
 # Expo
 .expo/
 dist/
+dist-pages/
+.vscode/
 web-build/
 .preview-dist/
 expo-env.d.ts

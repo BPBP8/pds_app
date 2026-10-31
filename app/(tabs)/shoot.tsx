@@ -30,7 +30,6 @@ import { useAuth } from '@/src/auth-context';
 import { db } from '@/src/config/firebase';
 import { SEED_POSTS, type SeedCategory, type SeedPost } from '@/src/data/seed-posts';
 import { formatDistance } from '@/src/distance';
-import { shouldRequestLoginForBrowse } from '@/src/guest-engagement';
 import { useOnboardingTour, useTourTarget } from '@/src/onboarding-tour-context';
 import { useSavedShots } from '@/src/saved-shots-context';
 
@@ -79,8 +78,6 @@ const normalizeRemotePost = (id: string, value: unknown): RemotePost | null => {
 
 const FILTERS: readonly Filter[] = ['全部', '旅行', '人像', '美食', '宠物'];
 
-const compactNumber = (value: number) =>
-  value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
 
 export default function ShootScreen() {
   const router = useRouter();
@@ -120,17 +117,21 @@ export default function ShootScreen() {
 
   useEffect(() => {
     const postsQuery = query(collection(db, 'posts'), orderBy('createdAt', 'desc'), limit(20));
-    return onSnapshot(
+    const timeout = setTimeout(() => setRemotePostsError('暂时无法读取新作品，已收录的拍摄方案仍可浏览。'), 12000);
+    const unsubscribe = onSnapshot(
       postsQuery,
       (snapshot) => {
+        if (snapshot.metadata.fromCache && snapshot.empty) return;
+        clearTimeout(timeout);
         setRemotePostsError('');
         setRemotePosts(snapshot.docs.flatMap((snapshotDoc) => {
           const normalized = normalizeRemotePost(snapshotDoc.id, snapshotDoc.data());
           return normalized ? [normalized] : [];
         }));
       },
-      () => setRemotePostsError('暂时无法读取新作品，请稍后重试。'),
+      () => { clearTimeout(timeout); setRemotePostsError('暂时无法读取新作品，请稍后重试。'); },
     );
+    return () => { clearTimeout(timeout); unsubscribe(); };
   }, []);
 
   const displayedFilter: Filter =
@@ -168,20 +169,10 @@ export default function ShootScreen() {
   const gridPosts = visibleSeedPosts.slice(1);
 
   const openSeedPost = async (post: SeedPost) => {
-    const returnTo = `/shot/${post.id}`;
-    if (!user && await shouldRequestLoginForBrowse()) {
-      router.push({ pathname: '/auth' as never, params: { returnTo } });
-      return;
-    }
     router.push({ pathname: '/shot/[id]', params: { id: post.id } });
   };
 
   const openRemotePost = async (post: RemotePost) => {
-    const returnTo = `/post/${post.id}`;
-    if (!user && await shouldRequestLoginForBrowse()) {
-      router.push({ pathname: '/auth' as never, params: { returnTo } });
-      return;
-    }
     router.push({ pathname: '/post/[id]', params: { id: post.id } });
   };
 
@@ -294,6 +285,12 @@ export default function ShootScreen() {
           </ScrollView>
         </View>
 
+        <View style={styles.productPaths}>
+          <TouchableOpacity style={styles.productPath} onPress={() => router.push('/(tabs)/locations')}><IconSymbol name="location.fill" size={20} color="#C45B34" /><Text style={styles.productPathTitle}>在哪拍</Text><Text style={styles.productPathCopy}>看照片找机位</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.productPath} onPress={() => featurePost && router.push({ pathname: '/shooting/[id]' as never, params: { id: featurePost.id } })}><IconSymbol name="book.fill" size={20} color="#C45B34" /><Text style={styles.productPathTitle}>怎么拍</Text><Text style={styles.productPathCopy}>跟着三步拍一张</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.productPath} onPress={() => router.push('/(tabs)/guides')}><IconSymbol name="camera.fill" size={20} color="#C45B34" /><Text style={styles.productPathTitle}>用什么拍</Text><Text style={styles.productPathCopy}>先看手里的设备</Text></TouchableOpacity>
+        </View>
+
         {featurePost ? (
           <View
             style={styles.featureSection}
@@ -344,14 +341,8 @@ export default function ShootScreen() {
                 <Text numberOfLines={2} style={styles.featureHook}>{featurePost.hook}</Text>
                 <View style={styles.featureFooter}>
                   <View style={styles.featureLikes}>
-                    <IconSymbol
-                      name={likedPosts[featurePost.id] ? 'heart.fill' : 'heart'}
-                      size={18}
-                      color={likedPosts[featurePost.id] ? '#FF8B70' : '#FFFFFF'}
-                    />
-                    <Text style={styles.featureLikesText}>
-                      {compactNumber(featurePost.likes + (likedPosts[featurePost.id] ? 1 : 0))}
-                    </Text>
+                    <IconSymbol name="camera.fill" size={16} color="#FFFFFF" />
+                    <Text style={styles.featureLikesText}>精选拍摄方案</Text>
                   </View>
                   <View {...featureTourTarget} style={styles.featureCta}>
                     <Text style={styles.featureCtaText}>查看地点与拍法</Text>
@@ -367,7 +358,7 @@ export default function ShootScreen() {
           <View style={styles.gridSection}>
             <View style={styles.sectionHeading}>
               <View>
-                <Text style={styles.sectionEyebrow}>北京人也在拍</Text>
+                <Text style={styles.sectionEyebrow}>北京拍摄参考</Text>
                 <Text style={styles.sectionTitle}>地标之外，还有生活</Text>
               </View>
               <Text style={styles.resultCount}>{visibleSeedPosts.length} 个灵感</Text>
@@ -375,7 +366,6 @@ export default function ShootScreen() {
 
             <View style={styles.grid}>
               {gridPosts.map((post) => {
-                const liked = Boolean(likedPosts[post.id]);
                 return (
                   <View key={post.id} style={styles.gridCard}>
                     <TouchableOpacity activeOpacity={0.94} onPress={() => void openSeedPost(post)}>
@@ -412,21 +402,19 @@ export default function ShootScreen() {
                       <View style={styles.gridActions}>
                         <TouchableOpacity
                           style={styles.heartButton}
-                          onPress={() => void likePost(post.id, 'seed')}
-                          accessibilityLabel="点赞作品"
+                          onPress={() => void openSeedPost(post)}
+                          accessibilityLabel="查看作品来源和参数"
                         >
                           <IconSymbol
-                            name={liked ? 'heart.fill' : 'heart'}
+                            name="camera.fill"
                             size={17}
-                            color={liked ? '#E85A3A' : '#6E696C'}
+                            color="#6E696C"
                           />
-                          <Text style={[styles.heartCount, liked && styles.heartCountActive]}>
-                            {compactNumber(post.likes + (liked ? 1 : 0))}
-                          </Text>
+                          <Text style={styles.heartCount}>查看参数</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.wantButton}
-                          onPress={() => void openSeedPost(post)}
+                          onPress={() => router.push({ pathname: '/shooting/[id]' as never, params: { id: post.id } })}
                           accessibilityLabel={`查看拍法：${post.title}`}
                         >
                           <Text style={styles.wantButtonText}>查看拍法</Text>
@@ -555,6 +543,10 @@ export default function ShootScreen() {
 }
 
 const styles = StyleSheet.create({
+  productPaths: { flexDirection: 'row', gap: 8, marginHorizontal: 16, marginTop: 14, marginBottom: 4 },
+  productPath: { flex: 1, backgroundColor: '#F6EEE4', borderRadius: 15, paddingVertical: 14, alignItems: 'center', gap: 5 },
+  productPathTitle: { color: '#493428', fontSize: 13, fontWeight: '800' },
+  productPathCopy: { color: '#A28D7B', fontSize: 10 },
   container: { flex: 1, backgroundColor: '#F4F1EC' },
   scrollContent: { width: '100%', maxWidth: 720, alignSelf: 'center', paddingHorizontal: 16 },
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },

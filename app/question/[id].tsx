@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Alert } from 'react-native';
+import { StyleSheet, View, Text, ScrollView, TouchableOpacity, TextInput, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
     collection,
@@ -107,50 +107,6 @@ const getAuthorInitial = (authorName: string) =>
 const isNavigableAuthorId = (authorId: string) =>
     /^[A-Za-z0-9_-]{1,128}$/.test(authorId);
 
-const MOCK_QUESTION: Question = {
-    id: 'qa1',
-    title: '预算1万5，想入手一台拍人像为主的相机，有什么推荐？',
-    description: '主要拍人像，偶尔拍拍风景，不怎么拍视频。希望对焦快，直出肤色好看。',
-    budget: '1万-2万',
-    useCase: '人像摄影',
-    authorId: 'user1',
-    authorName: '摄影小白',
-    answersCount: 3,
-    upvotes: 45,
-    isResolved: true,
-    tags: ['人像', 'Sony', 'Canon'],
-};
-
-const MOCK_ANSWERS: Answer[] = [
-    {
-        id: 'a1',
-        questionId: 'qa1',
-        answerText: '这个预算推荐 Sony A7M4， 对焦性能非常出色，特别是人眼对焦，拍人像很方便。直出颜色通过创意外观也能调出很好看的肤色。',
-        authorId: 'user10',
-        authorName: '器材老玩家',
-        upvotes: 23,
-        isAccepted: true,
-    },
-    {
-        id: 'a2',
-        questionId: 'qa1',
-        answerText: 'Canon R6 Mark II 也很好，直出肤色是业界标杆，拍人像非常省心。就是价格可能稍微超预算一点点。',
-        authorId: 'user11',
-        authorName: 'Canon粉',
-        upvotes: 12,
-        isAccepted: false,
-    },
-    {
-        id: 'a3',
-        questionId: 'qa1',
-        answerText: '如果不介意aps-c画幅，富士X-T5也是很好的选择。胶片模拟拍人像很有味道，而且性价比很高。',
-        authorId: 'user12',
-        authorName: '富士用户',
-        upvotes: 8,
-        isAccepted: false,
-    },
-];
-
 export default function QuestionDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const insets = useSafeAreaInsets();
@@ -159,12 +115,13 @@ export default function QuestionDetailScreen() {
     const [question, setQuestion] = useState<Question | null>(null);
     const [answers, setAnswers] = useState<Answer[]>([]);
     const [loading, setLoading] = useState(true);
-    const [isCuratedExample, setIsCuratedExample] = useState(false);
+    const [loadError, setLoadError] = useState('');
+    const [submitError, setSubmitError] = useState('');
     const [answerText, setAnswerText] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
     const openAnswerAuthor = (answer: Answer) => {
-        if (isCuratedExample || !isNavigableAuthorId(answer.authorId)) return;
+        if (!isNavigableAuthorId(answer.authorId)) return;
         router.push({
             pathname: '/user/[id]' as never,
             params: { id: answer.authorId, name: answer.authorName },
@@ -174,6 +131,11 @@ export default function QuestionDetailScreen() {
     useEffect(() => {
         let unsubscribeAnswers: (() => void) | undefined;
         let active = true;
+        setLoading(true);
+        setQuestion(null);
+        setAnswers([]);
+        setLoadError('');
+        const timeout = setTimeout(() => { if (active) { setLoading(false); setLoadError('暂时无法读取问题，请检查网络后重新进入。'); } }, 12000);
         async function fetchData() {
             if (!id) {
                 if (active) setLoading(false);
@@ -186,7 +148,7 @@ export default function QuestionDetailScreen() {
                 if (!active) return;
 
                 if (docSnap.exists()) {
-                    setIsCuratedExample(false);
+                    setLoadError('');
                     setQuestion(normalizeQuestion(docSnap.id, docSnap.data()));
                     const answersQuery = query(
                         collection(db, 'questions', id, 'answers'),
@@ -204,23 +166,20 @@ export default function QuestionDetailScreen() {
                     }
                     unsubscribeAnswers = unsubscribe;
                 } else {
-                    setIsCuratedExample(true);
-                    setQuestion(MOCK_QUESTION);
-                    setAnswers(MOCK_ANSWERS);
+                    setQuestion(null);
                 }
             } catch {
                 if (!active) return;
-                setIsCuratedExample(true);
-                setQuestion(MOCK_QUESTION);
-                setAnswers(MOCK_ANSWERS);
+                setLoadError('暂时无法读取问题，请检查网络后重试。');
             } finally {
-                if (active) setLoading(false);
+                if (active) { setLoading(false); clearTimeout(timeout); }
             }
         }
 
         void fetchData();
         return () => {
             active = false;
+            clearTimeout(timeout);
             unsubscribeAnswers?.();
         };
     }, [id]);
@@ -233,6 +192,7 @@ export default function QuestionDetailScreen() {
         }
 
         setSubmitting(true);
+        setSubmitError('');
         try {
             const questionRef = doc(db, 'questions', id);
             const answerRef = doc(collection(db, 'questions', id, 'answers'));
@@ -256,7 +216,7 @@ export default function QuestionDetailScreen() {
             });
             setAnswerText('');
         } catch {
-            Alert.alert('发送失败', '请检查网络后重试。');
+            setSubmitError('发送失败，请检查网络后重试。');
         } finally {
             setSubmitting(false);
         }
@@ -273,7 +233,7 @@ export default function QuestionDetailScreen() {
     if (!question) {
         return (
             <View style={[styles.container, styles.centerContainer]}>
-                <Text style={styles.errorText}>问题不存在</Text>
+                <Text style={styles.errorText}>{loadError || '问题不存在或已被删除'}</Text>
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Text style={styles.backButtonText}>返回</Text>
                 </TouchableOpacity>
@@ -348,15 +308,15 @@ export default function QuestionDetailScreen() {
                         <TouchableOpacity
                             style={styles.answerHeader}
                             activeOpacity={0.72}
-                            disabled={isCuratedExample || !isNavigableAuthorId(answer.authorId)}
+                            disabled={!isNavigableAuthorId(answer.authorId)}
                             onPress={() => openAnswerAuthor(answer)}
                             accessibilityRole={
-                                !isCuratedExample && isNavigableAuthorId(answer.authorId)
+                                isNavigableAuthorId(answer.authorId)
                                     ? 'button'
                                     : undefined
                             }
                             accessibilityLabel={
-                                !isCuratedExample && isNavigableAuthorId(answer.authorId)
+                                isNavigableAuthorId(answer.authorId)
                                     ? `查看${answer.authorName}的作品`
                                     : undefined
                             }
@@ -367,7 +327,7 @@ export default function QuestionDetailScreen() {
                                 </Text>
                             </View>
                             <Text style={styles.answerAuthor}>{answer.authorName}</Text>
-                            {!isCuratedExample && isNavigableAuthorId(answer.authorId) ? (
+                            {isNavigableAuthorId(answer.authorId) ? (
                                 <Text style={styles.answerWorksLink}>看作品 ›</Text>
                             ) : null}
                         </TouchableOpacity>
@@ -381,15 +341,8 @@ export default function QuestionDetailScreen() {
 
             {/* Answer Input */}
             <View style={[styles.inputContainer, { paddingBottom: insets.bottom + 20 }]}>
-                {isCuratedExample ? (
-                    <TouchableOpacity
-                        style={styles.curatedButton}
-                        onPress={() => router.push('/ask-question')}
-                    >
-                        <Text style={styles.curatedButtonText}>这是精选示例，去发布一个真实问题</Text>
-                    </TouchableOpacity>
-                ) : (
-                    <>
+                {submitError ? <Text style={styles.errorText}>{submitError}</Text> : null}
+                {(                    <>
                         <TextInput
                             style={styles.input}
                             placeholder="写下你的回答..."

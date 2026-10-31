@@ -1,76 +1,48 @@
 # 拍点啥
 
-围绕“拍点啥、用啥拍、怎么拍”提供完整拍摄决策链路的 Expo / React Native 应用。主要面向想拍出好照片的普通用户，当前以北京旅行、人像、美食和宠物等生活化题材作为演示内容。
+**看照片找机位，跟着三步拍一张，再按场景了解设备。**
 
-## 当前功能
+面向旅行与日常摄影新手的拍摄决策产品。当前聚焦北京，用同一条体验连接“在哪拍、怎么拍、用什么拍”。支持浏览器体验，保留 Expo / React Native 源码。
 
-- 按题材浏览北京拍摄灵感与附近作品
-- 查看作品的地点、时间、设备、参数和复刻步骤
-- 登录后点赞、加入“想拍”清单并跨设备找回
-- 邮箱注册、登录、退出和密码重置
-- 单图作品发布，自动读取照片中的设备、时间与参数
-- 登录后发布器材问题和回答，内容同步到 Firestore
-- 手机、相机、运动相机和无人机等设备推荐入口
-- 可跨页面前进、后退和退出恢复的新手教程
-- Firebase Authentication / Firestore 数据接入与安全规则
+> 在线入口待部署：当前已准备网页构建和 GitHub Pages 工作流，尚未确认发布成功。注册、发布与收藏保留原 Firebase 服务，当前连接与写入尚未验证。
 
-## 本地预览
+[产品思路与体验路径](docs/PRODUCT.md) · [本地预览与发布说明](docs/DEPLOY.md) · [验证记录与截图](docs/VERIFICATION.md)
 
-Windows 用户可以直接双击 `一键启动.bat`。脚本会检查依赖、生成干净的静态 Web 包并自动打开首页。
+## 三个问题，三个入口
 
-也可以使用命令：
+| 入口 | 能做什么 |
+| --- | --- |
+| 在哪拍 | 在真实地图上看照片点位、按题材筛选、定位与计算距离、打开导航，并进入对应拍法 |
+| 怎么拍 | 按站位、构图与动作、设备设置三步操作；切换四种构图辅助线，用自己的照片对照取景 |
+| 用什么拍 | 从场景与升级意向出发，按真实拍摄设备查看样片和原始参数，带着具体设备与场景提问 |
+
+游客可浏览地图、拍法与器材；收藏、点赞、发布和问答写入需要登录。没有本地模拟登录或虚构发布成功。
+
+## 内容来源
+
+收录 12 条编辑拍摄方案。原始拍摄信息与推荐设置分开展示，作品详情保留素材作者、来源和许可。地图区分原始照片坐标与地点参考，器材库场景示意不冒充特定机型实拍。
+
+## 本地运行
 
 ```bash
-npm install
-npm run preview
+npm ci
+npm run build:web
+node scripts/static-preview.cjs dist 8766
 ```
 
-## 代码检查
+浏览器打开 http://127.0.0.1:8766/ 。Windows 可双击一键启动.bat。日常开发使用 npm run web。
 
 ```bash
 npm run check
+npm run test:product
 ```
 
-## Firebase 后端
+## 技术与边界
 
-项目使用 Firebase 邮箱密码认证和 Cloud Firestore。首次部署前，需要在 Firebase 控制台创建默认 Firestore 数据库；本项目面向北京用户，建议选择香港区域 `asia-east2`。随后执行：
+- Expo SDK 54、React Native 0.81、TypeScript、expo-router。
+- Leaflet + OpenStreetMap France HOT 底图；保留署名与失效提示。
+- Firebase Authentication / Firestore；当前保留原服务，未迁移国内后端。
+- expo-image-picker、exifr：选择照片并读取可用的原始拍摄信息；对照预览不上传图片。
+- 网页为单页输出，GitHub Actions 配置检查、构建与 Pages 发布。
 
-```bash
-npx --yes firebase-tools@15.27.0 login
-npm run firebase:deploy
-```
-
-当前原型会先把单图压缩后存入 Firestore 文档，以避开未开通付费 Storage 时的上传阻塞，适合小规模演示。正式运营前应迁移为对象存储 + 缩略图/CDN。
-
-## 手机安装包
-
-项目已配置 EAS Build。首次构建需要一个 Expo 账号，并执行登录：
-
-```bash
-npx eas-cli@latest login
-```
-
-生成 Android APK（可直接下载到安卓手机安装）：
-
-```bash
-npm run build:android:apk
-```
-
-构建完成后，EAS 会提供下载地址和二维码。Android 手机打开该地址即可下载 APK；系统可能要求允许“安装未知来源应用”。
-
-生成 iPhone 内测包：
-
-```bash
-npm run build:ios:preview
-```
-
-iPhone 真机安装需要 Apple Developer Program 账号，并需要先把测试设备加入 Ad Hoc 分发名单。面向更多用户时建议改用 TestFlight。
-
-## 主要技术
-
-- React Native 0.81 + Expo SDK 54
-- expo-router
-- Firebase Authentication / Cloud Firestore
-- expo-location / expo-image-picker
-
-Android 包名与 iOS Bundle ID 均为 `com.bpbp8.pdsapp`。
+当前不含实时 AI 指导、自动审片或器材实时行情。用户发布图仍沿用压缩后存入 Firestore 的原方案；后续真实运营应另行确认图片存储与服务预算。

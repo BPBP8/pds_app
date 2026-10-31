@@ -68,58 +68,6 @@ function normalizeQuestion(id: string, value: unknown): Question {
     };
 }
 
-const MOCK_QUESTIONS: Question[] = [
-    {
-        id: 'qa1',
-        title: '预算1万5，想入手一台拍人像为主的相机，有什么推荐？',
-        description: '主要拍人像，偶尔拍拍风景，不怎么拍视频。希望对焦快，直出肤色好看。',
-        budget: '1万-2万',
-        useCase: '人像摄影',
-        authorId: 'user1',
-        authorName: '摄影小白',
-        answersCount: 12,
-        upvotes: 45,
-        isResolved: true,
-        tags: ['人像', 'Sony', 'Canon'],
-    },
-    {
-        id: 'qa2',
-        title: 'Sony A7M4 和 Canon R6 Mark II 怎么选？',
-        description: '这两台相机价格差不多，主要拍照片和偶尔拍视频，不知道该怎么选。',
-        budget: '2万以上',
-        useCase: '综合使用',
-        authorId: 'user2',
-        authorName: '器材纠结党',
-        answersCount: 8,
-        upvotes: 32,
-        isResolved: false,
-        tags: ['Sony', 'Canon', '全画幅'],
-    },
-    {
-        id: 'qa3',
-        title: '手机拍照和相机拍照差别大吗？',
-        description: '新手入门，不知道是先用手机拍还是攒钱买相机，想问问两者的实际差别。',
-        authorId: 'user3',
-        authorName: '新手咨询',
-        answersCount: 23,
-        upvotes: 67,
-        isResolved: false,
-        tags: ['新手入门', '手机摄影'],
-    },
-    {
-        id: 'qa4',
-        title: '富士X100V值得买吗？适合什么场景？',
-        description: '被它的复古外观吸引了，但不知道实际使用体验如何。',
-        budget: '1万-2万',
-        useCase: '街头摄影',
-        authorId: 'user4',
-        authorName: '街拍爱好者',
-        answersCount: 15,
-        upvotes: 28,
-        isResolved: true,
-        tags: ['Fujifilm', '街头摄影', '便携'],
-    },
-];
 
 const FILTER_OPTIONS = ['全部', '未解决', '已解决', '热门'];
 
@@ -129,34 +77,42 @@ export default function QuestionsScreen() {
     const { user } = useAuth();
     const [questions, setQuestions] = useState<Question[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [selectedFilter, setSelectedFilter] = useState('全部');
     const [searchText, setSearchText] = useState('');
 
     useEffect(() => {
         let isMounted = true;
+        const timeout = setTimeout(() => { if (isMounted) { setLoadError('暂时无法读取问答，请稍后重试。'); setLoading(false); } }, 12000);
 
         try {
             const q = query(collection(db, 'questions'), orderBy('createdAt', 'desc'));
             const unsubscribe = onSnapshot(q, (querySnapshot) => {
-                if (!isMounted) return;
+                if (!isMounted || (querySnapshot.metadata.fromCache && querySnapshot.empty)) return;
+                clearTimeout(timeout);
                 const data = querySnapshot.docs.map((questionDoc) =>
                     normalizeQuestion(questionDoc.id, questionDoc.data()),
                 );
-                setQuestions(data.length > 0 ? data : MOCK_QUESTIONS);
+                setQuestions(data);
+                setLoadError('');
                 setLoading(false);
             }, () => {
                 if (!isMounted) return;
-                setQuestions(MOCK_QUESTIONS);
+                setQuestions([]);
+                setLoadError('暂时无法读取问答，请检查网络后重试。');
                 setLoading(false);
             });
 
             return () => {
                 isMounted = false;
+                clearTimeout(timeout);
                 unsubscribe();
             };
         } catch {
+            clearTimeout(timeout);
             if (isMounted) {
-                setQuestions(MOCK_QUESTIONS);
+                setQuestions([]);
+                setLoadError('暂时无法读取问答，请检查网络后重试。');
                 setLoading(false);
             }
         }
@@ -246,6 +202,7 @@ export default function QuestionsScreen() {
                     renderItem={renderItem}
                     contentContainerStyle={styles.listContainer}
                     showsVerticalScrollIndicator={false}
+                    ListEmptyComponent={<View style={styles.centerContainer}><Text style={styles.subtitle}>{loadError || (searchText ? '没有找到匹配问题，试试其他关键词。' : '还没有公开问题，点击下方加号发起讨论。')}</Text></View>}
                 />
             )}
 

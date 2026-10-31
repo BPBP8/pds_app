@@ -2,7 +2,7 @@ import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
-import { Platform, View, StyleSheet } from 'react-native';
+import { Platform, View, StyleSheet, useWindowDimensions } from 'react-native';
 
 import { SavedShotsProvider } from '@/src/saved-shots-context';
 import { AuthProvider } from '@/src/auth-context';
@@ -15,6 +15,7 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
+  const { width } = useWindowDimensions();
   const content = (
     <AuthProvider>
       <AppPreferencesProvider>
@@ -37,7 +38,7 @@ export default function RootLayout() {
     </AuthProvider>
   );
 
-  if (Platform.OS === 'web') {
+  if (Platform.OS === 'web' && width >= 600) {
     return (
       <View style={styles.webContainer}>
         <View style={styles.phoneWrapper}>

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Alert } from 'react-native';
-import { useRouter } from 'expo-router';
+import { StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 
@@ -12,24 +12,31 @@ const USE_CASE_OPTIONS = ['人像摄影', '风光摄影', '街头摄影', '建�
 
 export default function AskQuestionScreen() {
     const router = useRouter();
+    const context = useLocalSearchParams<{ deviceName?: string; scene?: string }>();
+    const equipment = typeof context.deviceName === 'string' ? context.deviceName.trim().slice(0, 80) : '';
     const { user } = useAuth();
-    const [title, setTitle] = useState('');
-    const [description, setDescription] = useState('');
+    const [title, setTitle] = useState(equipment ? '关于 ' + equipment + '，我想请教…' : '');
+    const scene = typeof context.scene === 'string' ? context.scene.slice(0, 40) : '';
+    const [description, setDescription] = useState(scene ? `我想了解 ${equipment} 在${scene}场景中的表现。\n已有设备：\n预算：\n具体困惑：` : '');
     const [budget, setBudget] = useState('');
     const [useCase, setUseCase] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [feedback, setFeedback] = useState('');
+    const [publishedId, setPublishedId] = useState('');
 
     const handleSubmit = async () => {
+        if (isSubmitting || publishedId) return;
+        setFeedback('');
         if (!user) {
-            router.replace({ pathname: '/auth' as never, params: { returnTo: '/ask-question' } });
+            router.replace({ pathname: '/auth' as never, params: { returnTo: '/ask-question', deviceName: equipment, scene } });
             return;
         }
         if (!title.trim()) {
-            Alert.alert('提示', '请输入问题标题');
+            setFeedback('请输入问题标题。');
             return;
         }
         if (!description.trim()) {
-            Alert.alert('提示', '请输入问题描述');
+            setFeedback('请输入问题描述。');
             return;
         }
 
@@ -50,15 +57,11 @@ export default function AskQuestionScreen() {
                 createdAt: serverTimestamp(),
             });
             setIsSubmitting(false);
-            Alert.alert('成功', '问题已发布', [
-                {
-                    text: '查看问题',
-                    onPress: () => router.replace({ pathname: '/question/[id]', params: { id: questionRef.id } }),
-                },
-            ]);
+            setPublishedId(questionRef.id);
+            setFeedback('问题已发布。');
         } catch {
             setIsSubmitting(false);
-            Alert.alert('发布失败', '请检查网络后重试。');
+            setFeedback('暂时无法发布，请检查网络后重试。');
         }
     };
 
@@ -72,7 +75,7 @@ export default function AskQuestionScreen() {
                 <Text style={styles.headerTitle}>发布问题</Text>
                 <TouchableOpacity
                     onPress={handleSubmit}
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || Boolean(publishedId)}
                 >
                     <Text style={[styles.submitBtn, isSubmitting && styles.submitBtnDisabled]}>
                         {isSubmitting ? '发布中...' : '发布'}
@@ -81,6 +84,7 @@ export default function AskQuestionScreen() {
             </View>
 
             <ScrollView style={styles.form} showsVerticalScrollIndicator={false}>
+                {feedback ? <View accessibilityRole="alert" style={styles.tipsSection}><Text style={styles.tipsText}>{feedback}</Text>{publishedId ? <TouchableOpacity onPress={() => router.replace({ pathname: '/question/[id]', params: { id: publishedId } })}><Text style={styles.submitBtn}>查看问题 →</Text></TouchableOpacity> : null}</View> : null}
                 {/* Title */}
                 <View style={styles.section}>
                     <Text style={styles.label}>问题标题 *</Text>

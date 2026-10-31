@@ -1,0 +1,6 @@
+.pds-live-map { height: 320px; width: 100%; border-radius: 16px; z-index: 0; background: #ece9df; }
+.pds-photo-marker { background: transparent; border: none; }
+.pds-photo-marker img { width: 46px; height: 46px; object-fit: cover; border: 3px solid white; border-radius: 12px; box-shadow: 0 2px 12px #35271d35; }
+.pds-photo-marker.is-selected img { border-color: #d85331; transform: scale(1.14); }
+.pds-live-map .leaflet-control-attribution { font-size: 9px; }
+.pds-live-map .leaflet-control-zoom a { color: #403832; }

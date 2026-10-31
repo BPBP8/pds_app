@@ -5,7 +5,6 @@ import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -23,13 +22,14 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useAppPreferences } from '@/src/app-preferences-context';
 import { getSafeAuthorName, useAuth } from '@/src/auth-context';
 import { db } from '@/src/config/firebase';
+import { SEED_POST_BY_ID } from '@/src/data/seed-posts';
+import { readPhotoMetadata } from '@/src/photo-metadata';
 
 const CATEGORIES = ['旅行', '人像', '美食', '宠物', '生活'] as const;
 const MAX_IMAGE_DATA_LENGTH = 720_000;
 const MAX_DEVICE_NAME_LENGTH = 100;
 const MAX_LOCATION_LABEL_LENGTH = 100;
 const MAX_CAPTURED_AT_LENGTH = 50;
-const MAX_PARAM_VALUE_LENGTH = 100;
 
 type PickedPhoto = {
   uri: string;
@@ -38,35 +38,6 @@ type PickedPhoto = {
   fileName?: string | null;
   exif?: Record<string, unknown> | null;
 };
-
-const asExifText = (value: unknown, maxLength = MAX_PARAM_VALUE_LENGTH) =>
-  typeof value === 'string' || typeof value === 'number'
-    ? String(value).trim().slice(0, maxLength)
-    : '';
-
-function readPhotoMetadata(photo: PickedPhoto | null, fallbackDevice: string) {
-  const exif = photo?.exif ?? {};
-  const make = asExifText(exif.Make || exif.make);
-  const model = asExifText(exif.Model || exif.model);
-  const capturedAt = asExifText(
-    exif.DateTimeOriginal || exif.DateTimeDigitized || exif.DateTime || exif.datetime,
-    MAX_CAPTURED_AT_LENGTH,
-  );
-  const params = {
-    lens: asExifText(exif.LensModel || exif.Lens || exif.lensModel),
-    focalLength: asExifText(exif.FocalLength || exif.focalLength),
-    aperture: asExifText(exif.FNumber || exif.ApertureValue || exif.fNumber),
-    shutter: asExifText(exif.ExposureTime || exif.ShutterSpeedValue || exif.exposureTime),
-    iso: asExifText(exif.ISOSpeedRatings || exif.PhotographicSensitivity || exif.iso),
-  };
-
-  return {
-    deviceName: ([make, model].filter(Boolean).join(' ') || fallbackDevice.trim())
-      .slice(0, MAX_DEVICE_NAME_LENGTH),
-    capturedAt,
-    params: Object.fromEntries(Object.entries(params).filter(([, value]) => Boolean(value))),
-  };
-}
 
 async function compressForFirestore(uri: string) {
   const attempts = [
@@ -91,7 +62,8 @@ async function compressForFirestore(uri: string) {
 
 export default function PublishModal() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ deviceName?: string }>();
+  const params = useLocalSearchParams<{ deviceName?: string; sourceId?: string }>();
+  const sourcePost = params.sourceId ? SEED_POST_BY_ID[String(params.sourceId)] : undefined;
   const insets = useSafeAreaInsets();
   const { user, loading: authLoading } = useAuth();
   const { city, device } = useAppPreferences();
@@ -101,23 +73,26 @@ export default function PublishModal() {
   }, [device.name, params.deviceName]);
   const [photo, setPhoto] = useState<PickedPhoto | null>(null);
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState<(typeof CATEGORIES)[number]>('生活');
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number]>(sourcePost?.category ?? '生活');
   const [notes, setNotes] = useState('');
   const [deviceName, setDeviceName] = useState(requestedDeviceName);
-  const [locationLabel, setLocationLabel] = useState('');
+  const [locationLabel, setLocationLabel] = useState(sourcePost?.location.label ?? '');
   const [showPreciseLocation, setShowPreciseLocation] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [feedback, setFeedback] = useState('');
+  const [publishedId, setPublishedId] = useState('');
+  const notify = (title: string, message: string) => setFeedback(`${title}：${message}`);
 
   const metadata = useMemo(
-    () => readPhotoMetadata(photo, requestedDeviceName),
+    () => readPhotoMetadata(photo?.exif ?? {}, requestedDeviceName),
     [photo, requestedDeviceName],
   );
 
   useEffect(() => {
     if (!authLoading && !user) {
-      router.replace({ pathname: '/auth' as never, params: { returnTo: '/modal' } });
+      router.replace({ pathname: '/auth' as never, params: { returnTo: '/modal', sourceId: String(params.sourceId ?? ''), deviceName: requestedDeviceName } });
     }
-  }, [authLoading, router, user]);
+  }, [authLoading, params.sourceId, requestedDeviceName, router, user]);
 
   useEffect(() => {
     setDeviceName(metadata.deviceName);
@@ -126,7 +101,7 @@ export default function PublishModal() {
   const pickPhoto = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('需要相册权限', '请允许拍点啥读取你选择的照片。');
+      notify('需要相册权限', '请允许拍点啥读取你选择的照片。');
       return;
     }
 
@@ -139,48 +114,58 @@ export default function PublishModal() {
     if (result.canceled) return;
 
     const asset = result.assets[0];
+    let exif = asset.exif as Record<string, unknown> | null | undefined;
+    if (Platform.OS === 'web') {
+      try {
+        const { parse } = await import('exifr');
+        exif = await parse(asset.file ?? asset.uri, ['Make', 'Model', 'DateTimeOriginal', 'LensModel', 'FocalLength', 'FNumber', 'ExposureTime', 'ISO']);
+      } catch { exif = null; }
+    }
+    setFeedback('');
     setPhoto({
       uri: asset.uri,
       width: asset.width,
       height: asset.height,
       fileName: asset.fileName,
-      exif: asset.exif as Record<string, unknown> | null | undefined,
+      exif,
     });
   };
 
   const publish = async () => {
+    if (uploading || publishedId) return;
+    setFeedback('');
     if (!user) {
       router.replace({ pathname: '/auth' as never, params: { returnTo: '/modal' } });
       return;
     }
     if (!photo) {
-      Alert.alert('还没有照片', '请先选择一张照片。');
+      notify('还没有照片', '请先选择一张照片。');
       return;
     }
     if (!title.trim()) {
-      Alert.alert('填写作品名称', '给这张照片起一个名字。');
+      notify('填写作品名称', '给这张照片起一个名字。');
       return;
     }
 
     const normalizedDeviceName = (deviceName.trim() || device.name.trim());
     if (normalizedDeviceName.length > MAX_DEVICE_NAME_LENGTH) {
-      Alert.alert('设备名称过长', `拍摄设备最多填写 ${MAX_DEVICE_NAME_LENGTH} 个字符。`);
+      notify('设备名称过长', `拍摄设备最多填写 ${MAX_DEVICE_NAME_LENGTH} 个字符。`);
       return;
     }
     const normalizedLocationLabel = locationLabel.trim();
     if (normalizedLocationLabel.length > MAX_LOCATION_LABEL_LENGTH) {
-      Alert.alert('地点名称过长', `拍摄地点最多填写 ${MAX_LOCATION_LABEL_LENGTH} 个字符。`);
+      notify('地点名称过长', `拍摄地点最多填写 ${MAX_LOCATION_LABEL_LENGTH} 个字符。`);
       return;
     }
     if (metadata.capturedAt.length > MAX_CAPTURED_AT_LENGTH) {
-      Alert.alert('照片时间信息异常', '这张照片的拍摄时间信息过长，请换一张照片后重试。');
+      notify('照片时间信息异常', '这张照片的拍摄时间信息过长，请换一张照片后重试。');
       return;
     }
 
     setUploading(true);
     try {
       const imageUrl = await compressForFirestore(photo.uri);
-      await addDoc(collection(db, 'posts'), {
+      const published = await addDoc(collection(db, 'posts'), {
         title: title.trim(),
         imageUrl,
         category,
@@ -203,9 +188,8 @@ export default function PublishModal() {
         createdAt: serverTimestamp(),
       });
 
-      Alert.alert('发布成功', '作品已同步到首页和你的个人主页。', [
-        { text: '查看我的作品', onPress: () => router.replace('/(tabs)/profile') },
-      ]);
+      setPublishedId(published.id);
+      setFeedback('发布成功，作品已同步。');
     } catch (error) {
       const code = typeof error === 'object' && error && 'code' in error
         ? String((error as { code?: unknown }).code)
@@ -214,11 +198,11 @@ export default function PublishModal() {
         error instanceof Error && error.message === 'image-too-large'
           ? '这张照片压缩后仍然太大，请换一张后重试。'
           : code === 'permission-denied'
-            ? '后端拒绝写入，请确认已登录且 Firestore 规则已部署。'
+            ? '当前账号暂时无法发布，请重新登录后再试。'
             : code === 'unavailable'
               ? '暂时连接不到后端，请检查网络后重试。'
               : '发布失败，请稍后再试。';
-      Alert.alert('没有发布成功', message);
+      notify('没有发布成功', message);
     } finally {
       setUploading(false);
     }
@@ -238,7 +222,7 @@ export default function PublishModal() {
           <IconSymbol name="xmark" size={21} color="#2E2A2C" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>发布作品</Text>
-        <TouchableOpacity onPress={publish} disabled={uploading} style={styles.headerPublish}>
+        <TouchableOpacity onPress={publish} disabled={uploading || Boolean(publishedId)} style={styles.headerPublish}>
           {uploading ? <ActivityIndicator color="#D85331" /> : <Text style={styles.headerPublishText}>发布</Text>}
         </TouchableOpacity>
       </View>
@@ -248,6 +232,7 @@ export default function PublishModal() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
       >
+        {feedback ? <View accessibilityRole="alert" style={styles.feedback}><Text style={styles.feedbackText}>{feedback}</Text>{publishedId ? <TouchableOpacity onPress={() => router.replace({ pathname: '/post/[id]', params: { id: publishedId } })}><Text style={styles.headerPublishText}>查看这张作品 →</Text></TouchableOpacity> : null}</View> : null}
         <TouchableOpacity style={styles.photoCard} onPress={pickPhoto} activeOpacity={0.88}>
           {photo ? (
             <Image source={{ uri: photo.uri }} style={styles.photo} resizeMode="cover" />
@@ -255,7 +240,7 @@ export default function PublishModal() {
             <View style={styles.photoPlaceholder}>
               <View style={styles.photoIcon}><IconSymbol name="camera.fill" size={28} color="#FFFFFF" /></View>
               <Text style={styles.photoTitle}>选择一张照片</Text>
-              <Text style={styles.photoBody}>前期只发单图，让每张作品都值得被看见</Text>
+              <Text style={styles.photoBody}>选择照片，分享设备、参数和拍法</Text>
             </View>
           )}
           {photo ? <View style={styles.changeBadge}><Text style={styles.changeText}>更换</Text></View> : null}
@@ -359,6 +344,8 @@ export default function PublishModal() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#FFFDFC' },
+  feedback: { padding: 15, backgroundColor: '#FAE9DD', borderRadius: 14, marginBottom: 16, gap: 10 },
+  feedbackText: { color: '#855135', lineHeight: 22, fontSize: 13 },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFDFC' },
   header: {
     minHeight: 62, paddingHorizontal: 16, paddingBottom: 10, flexDirection: 'row',

@@ -16,7 +16,8 @@ export default function TabLayout() {
         tabBarInactiveTintColor: '#9C9699',
         headerShown: false,
         tabBarButton: HapticTab,
-        tabBarShowLabel: false,
+        tabBarShowLabel: true,
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '600', marginTop: 3 },
         tabBarStyle: {
           backgroundColor: '#FFFDFC',
           borderTopWidth: 1,
@@ -62,9 +63,9 @@ export default function TabLayout() {
       <Tabs.Screen
         name="locations"
         options={{
-          title: '怎么拍',
-          tabBarAccessibilityLabel: '怎么拍，查看拍摄方法',
-          tabBarIcon: ({ color }) => <IconSymbol size={27} name="book.fill" color={color} />,
+          title: '在哪拍',
+          tabBarAccessibilityLabel: '在哪拍，查看真实地图与摄影机位',
+          tabBarIcon: ({ color }) => <IconSymbol size={27} name="location.fill" color={color} />,
         }}
       />
 

@@ -128,6 +128,11 @@ export default function ShotDetailScreen() {
           <Text style={styles.title}>{post.title}</Text>
           <Text style={styles.hook}>{post.hook}</Text>
 
+          <TouchableOpacity style={styles.guideEntry} onPress={() => router.push({ pathname: '/shooting/[id]' as never, params: { id: post.id } })}>
+            <View style={{ flex: 1 }}><Text style={styles.guideEntryTitle}>想拍出这一张？</Text><Text style={styles.guideEntryCopy}>看站位、试构图、按设备调整设置</Text></View>
+            <Text style={styles.guideEntryAction}>开始三步引导 →</Text>
+          </TouchableOpacity>
+
           <View style={styles.signatureBar}>
             <View style={styles.signatureItem}>
               <IconSymbol name="location.fill" size={15} color="#D85331" />
@@ -314,6 +319,10 @@ function InfoCard({ label, value, note }: { label: string; value: string; note: 
 }
 
 const styles = StyleSheet.create({
+  guideEntry: { flexDirection: 'row', gap: 12, alignItems: 'center', backgroundColor: '#FBEBDE', borderRadius: 14, padding: 16, marginTop: 18 },
+  guideEntryTitle: { color: '#713F26', fontWeight: '800', fontSize: 16 },
+  guideEntryCopy: { color: '#A57D60', fontSize: 11, lineHeight: 19, marginTop: 5 },
+  guideEntryAction: { color: '#C14D30', fontSize: 12, fontWeight: '800' },
   container: { flex: 1, backgroundColor: '#FFFFFF' },
   hero: { width: '100%', backgroundColor: '#ECECEA' },
   heroBadge: {

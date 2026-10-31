@@ -2,8 +2,9 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 
-const root = path.resolve(process.argv[2] || 'dist-check');
+const root = path.resolve(process.argv[2] || 'dist');
 const port = Number(process.argv[3] || 8766);
+const base = (process.argv[4] || '').replace(/\/$/, '');
 
 const contentTypes = {
   '.css': 'text/css; charset=utf-8',
@@ -15,22 +16,22 @@ const contentTypes = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.webp': 'image/webp',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
 };
 
 const server = http.createServer((request, response) => {
-  const pathname = decodeURIComponent((request.url || '/').split('?')[0]);
-  let relativePath = pathname === '/' ? 'index.html' : pathname.slice(1);
-
-  if (pathname.startsWith('/shot/') && !pathname.endsWith('.html')) {
-    relativePath = 'shot/[id].html';
-  } else if (pathname.startsWith('/post/') && !pathname.endsWith('.html')) {
-    relativePath = 'post/[id].html';
-  } else if (!path.extname(relativePath)) {
-    relativePath += '.html';
+  let pathname;
+  try { pathname = decodeURIComponent((request.url || '/').split('?')[0]); }
+  catch { response.writeHead(400); response.end('Bad request'); return; }
+  if (base && pathname !== base && !pathname.startsWith(base + '/')) {
+    response.writeHead(404); response.end('Not found'); return;
   }
+  pathname = pathname.slice(base.length) || '/';
+  const relativePath = pathname === '/' || !path.extname(pathname) ? 'index.html' : pathname.slice(1);
 
   const filePath = path.resolve(root, relativePath);
-  if (!filePath.startsWith(root)) {
+  if (!filePath.startsWith(root + path.sep)) {
     response.writeHead(403);
     response.end('Forbidden');
     return;
@@ -52,5 +53,5 @@ const server = http.createServer((request, response) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  console.log(`Static preview: http://127.0.0.1:${port}`);
+  console.log(`Static preview: http://127.0.0.1:${port}${base}/`);
 });

@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => onAuthStateChanged(auth, (nextUser) => {
       setUser(nextUser);
       setLoading(false);
-    }),
+    }, () => { setUser(null); setLoading(false); }),
     [],
   );
 
@@ -55,17 +55,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     email: string,
     password: string,
   ) => {
+    const rawName = displayName.trim();
+    if (!rawName || rawName.length > MAX_DISPLAY_NAME_LENGTH) {
+      const error = new Error('display-name-too-long') as Error & { code: string };
+      error.code = 'auth/display-name-too-long';
+      throw error;
+    }
     const credential = await createUserWithEmailAndPassword(
       auth,
       email.trim().toLowerCase(),
       password,
     );
-    const rawName = displayName.trim();
-    if (rawName.length > MAX_DISPLAY_NAME_LENGTH) {
-      const error = new Error('display-name-too-long') as Error & { code: string };
-      error.code = 'auth/display-name-too-long';
-      throw error;
-    }
     const name = normalizeDisplayName(rawName);
     if (name) await updateProfile(credential.user, { displayName: name });
 
@@ -111,13 +111,13 @@ export function getAuthErrorMessage(error: unknown) {
     : '';
 
   const messages: Record<string, string> = {
-    'auth/configuration-not-found': '登录服务尚未在 Firebase 中启用。',
+    'auth/configuration-not-found': '登录服务暂时不可用，请稍后重试。',
     'auth/display-name-too-long': `昵称不能超过 ${MAX_DISPLAY_NAME_LENGTH} 个字符。`,
     'auth/email-already-in-use': '这个邮箱已经注册，可以直接登录。',
     'auth/invalid-credential': '邮箱或密码不正确。',
     'auth/invalid-email': '请输入有效的邮箱地址。',
     'auth/network-request-failed': '网络连接失败，请检查网络后重试。',
-    'auth/operation-not-allowed': '邮箱密码登录尚未启用。',
+    'auth/operation-not-allowed': '暂时无法使用邮箱注册或登录，请稍后重试。',
     'auth/too-many-requests': '尝试次数过多，请稍后再试。',
     'auth/user-disabled': '这个账号已被停用。',
     'auth/weak-password': '密码强度不足，请至少输入 6 位。',

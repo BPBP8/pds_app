@@ -7,6 +7,7 @@ import { useAppPreferences, type DeviceKind } from '@/src/app-preferences-contex
 import { useAuth } from '@/src/auth-context';
 import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { db } from '@/src/config/firebase';
+import GearDiscovery from '@/components/gear-discovery';
 
 const itemWidth = '48%';
 
@@ -75,11 +76,6 @@ const normalizeQuestionPreview = (id: string, value: unknown): QuestionPreview =
   return { id, q: title || '未命名问题', answers };
 };
 
-const CURATED_QUESTIONS: QuestionPreview[] = [
-  { id: 'qa1', q: '预算1万5，想入手一台拍人像为主的相机，有什么推荐？', answers: 12 },
-  { id: 'qa2', q: 'Sony A7M4 和 Canon R6 Mark II 怎么选？', answers: 8 },
-  { id: 'qa3', q: '手机拍照和相机拍照差别大吗？', answers: 23 },
-];
 
 export default function GuidesScreen() {
   const insets = useSafeAreaInsets();
@@ -94,7 +90,8 @@ export default function GuidesScreen() {
   const [activeBrand, setActiveBrand] = useState('全部');
   const [activePrice, setActivePrice] = useState('全部');
   const [onlyForMyDevice, setOnlyForMyDevice] = useState(true);
-  const [questions, setQuestions] = useState<QuestionPreview[]>(CURATED_QUESTIONS);
+  const [questions, setQuestions] = useState<QuestionPreview[]>([]);
+  const [questionError, setQuestionError] = useState('正在读取公开问答…');
 
   useEffect(() => {
     const questionsQuery = query(
@@ -102,19 +99,24 @@ export default function GuidesScreen() {
       orderBy('createdAt', 'desc'),
       limit(3),
     );
-    return onSnapshot(
+    const timeout = setTimeout(() => setQuestionError('暂时无法读取公开问答，请稍后重试。'), 12000);
+    const unsubscribe = onSnapshot(
       questionsQuery,
       (snapshot) => {
+        if (snapshot.metadata.fromCache && snapshot.empty) return;
+        clearTimeout(timeout);
+        setQuestionError('');
         if (snapshot.empty) {
-          setQuestions(CURATED_QUESTIONS);
+          setQuestions([]);
           return;
         }
         setQuestions(snapshot.docs.map((questionDoc) =>
           normalizeQuestionPreview(questionDoc.id, questionDoc.data()),
         ));
       },
-      () => setQuestions(CURATED_QUESTIONS),
+      () => { clearTimeout(timeout); setQuestions([]); setQuestionError('暂时无法读取公开问答，请检查网络后重试。'); },
     );
+    return () => { clearTimeout(timeout); unsubscribe(); };
   }, []);
 
   // Unified global filtering logic
@@ -247,6 +249,7 @@ export default function GuidesScreen() {
         </View>
 
         {currentData ? <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+        <GearDiscovery equipmentName={currentData.title} />
         {/* Cover Hero Area */}
         <View style={styles.heroWrapper}>
           <ImageBackground source={{ uri: currentData.coverImage }} style={styles.heroImage} imageStyle={{ borderRadius: 20 }}>
@@ -274,9 +277,8 @@ export default function GuidesScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.reviewsScroll} contentContainerStyle={{ paddingHorizontal: 15 }}>
             {currentData.reviews.map((r: any, i: number) => (
               <View key={i} style={styles.reviewCard}>
-                <Text style={styles.reviewUser}>@{r.user}</Text>
+                <Text style={styles.reviewUser}>编辑使用建议</Text>
                 <Text style={styles.reviewText}>“{r.text}”</Text>
-                <Text style={styles.rating}>{'⭐'.repeat(r.rating)}</Text>
               </View>
             ))}
           </ScrollView>
@@ -292,7 +294,7 @@ export default function GuidesScreen() {
 
         {/* Gallery Grid */}
         <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}><IconSymbol name="camera.fill" size={16} color="#D85331" /><Text style={styles.sectionTitle}>适合场景示意</Text></View>
+          <View style={styles.sectionHeader}><IconSymbol name="camera.fill" size={16} color="#D85331" /><Text style={styles.sectionTitle}>适合场景示意 · 非机型实拍</Text></View>
           <View style={styles.galleryGrid}>
             {currentData.samples.map((img: any, i: number) => (
               <TouchableOpacity key={i} style={[styles.galleryItemWrapper, { width: itemWidth }]} onPress={() => setFullscreenImage(img.url)}>
@@ -334,7 +336,8 @@ export default function GuidesScreen() {
           </TouchableOpacity>
 
           <View style={styles.questionsList}>
-            <Text style={styles.questionsTitle}>热门问题</Text>
+            <Text style={styles.questionsTitle}>最新公开问题</Text>
+            {questions.length === 0 ? <Text style={styles.qaSubtitle}>{questionError || '还没有公开问题。说清你的预算、已有设备和拍摄场景，发起第一个讨论。'}</Text> : null}
             {questions.map((item) => (
               <TouchableOpacity
                 key={item.id}
@@ -369,6 +372,7 @@ export default function GuidesScreen() {
                  <Text style={styles.specsTitle}>📸 {currentData.title} 核心参数</Text>
                  <TouchableOpacity onPress={() => setSpecsModalVisible(false)}><IconSymbol name="plus" size={24} color="#666" style={{ transform: [{ rotate: '45deg' }] }} /></TouchableOpacity>
                </View>
+               <Text style={styles.qaSubtitle}>器材库价格为参考信息，购买前请核对渠道报价。</Text>
                <View style={styles.specsList}>
                  {currentData.specs && Object.entries(currentData.specs).map(([key, val], i) => (
                    <View key={i} style={styles.specRow}><Text style={styles.specKey}>{key.toUpperCase()}:</Text><Text style={styles.specValue}>{String(val)}</Text></View>

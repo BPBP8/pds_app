@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
 import {
   Image,
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,20 +12,15 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import ShotMap from '@/components/shot-map';
 import { useAppPreferences } from '@/src/app-preferences-context';
 import { SEED_POSTS, type SeedCategory } from '@/src/data/seed-posts';
 import { distanceInKilometers, formatDistance } from '@/src/distance';
+import { navigationUrl } from '@/src/photography';
 
 type Filter = '全部' | SeedCategory;
 
 const FILTERS: readonly Filter[] = ['全部', '旅行', '人像', '美食', '宠物'];
-const MARKER_POSITIONS = [
-  { left: '14%', top: '20%' },
-  { left: '58%', top: '13%' },
-  { left: '37%', top: '49%' },
-  { left: '72%', top: '58%' },
-  { left: '20%', top: '69%' },
-] as const;
 
 export default function LocationsScreen() {
   const router = useRouter();
@@ -74,7 +70,7 @@ export default function LocationsScreen() {
       >
         <View style={styles.header}>
           <View>
-            <Text style={styles.eyebrow}>怎么拍</Text>
+            <Text style={styles.eyebrow}>在哪拍</Text>
             <Text style={styles.title}>北京机位与拍法</Text>
             <Text style={styles.subtitle}>先找到地点，再看设备、参数和复刻步骤</Text>
           </View>
@@ -117,27 +113,9 @@ export default function LocationsScreen() {
         <View style={styles.mapSection}>
           <View style={styles.sectionTitleRow}>
             <Text style={styles.sectionTitle}>机位分布</Text>
-            <Text style={styles.mapHint}>示意位置 · 点击标记查看</Text>
+            <Text style={styles.mapHint}>点击照片选机位</Text>
           </View>
-          <View style={styles.mapCanvas}>
-            <View style={[styles.road, styles.roadOne]} />
-            <View style={[styles.road, styles.roadTwo]} />
-            <View style={[styles.road, styles.roadThree]} />
-            <View style={styles.water} />
-            {visiblePosts.slice(0, 5).map((post, index) => {
-              const active = selected?.id === post.id;
-              return (
-                <TouchableOpacity
-                  key={post.id}
-                  style={[styles.marker, MARKER_POSITIONS[index], active && styles.markerActive]}
-                  onPress={() => setSelectedId(post.id)}
-                  accessibilityLabel={`查看${post.location.shortLabel}`}
-                >
-                  <Text style={[styles.markerText, active && styles.markerTextActive]}>{index + 1}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+          <ShotMap posts={visiblePosts} selectedId={selectedId} onSelect={setSelectedId} coordinates={coordinates} />
 
           {selected ? (
             <TouchableOpacity style={styles.selectedCard} onPress={() => openPost(selected.id)} activeOpacity={0.88}>
@@ -145,13 +123,21 @@ export default function LocationsScreen() {
               <View style={styles.selectedCopy}>
                 <Text numberOfLines={1} style={styles.selectedTitle}>{selected.title}</Text>
                 <Text numberOfLines={1} style={styles.selectedMeta}>
-                  {selected.location.shortLabel} · {formatDistance(coordinates, selected.location.coordinates) ?? selected.time.label}
+                  {selected.location.shortLabel} · {selected.location.sourceLabel === '原始文件坐标' ? '原始坐标' : '地点参考'}
                 </Text>
                 <Text numberOfLines={2} style={styles.selectedMethod}>{selected.recreation.steps[0]}</Text>
               </View>
               <IconSymbol name="chevron.right" size={19} color="#D85331" />
             </TouchableOpacity>
           ) : null}
+          {selected ? <View style={styles.mapActions}>
+            <TouchableOpacity style={styles.mapActionPrimary} onPress={() => router.push({ pathname: '/shooting/[id]' as never, params: { id: selected.id } })}>
+              <Text style={styles.mapActionPrimaryText}>照着拍 · 三步引导</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.mapAction} onPress={() => void Linking.openURL(navigationUrl(selected, coordinates))}>
+              <Text style={styles.mapActionText}>查看位置与导航</Text>
+            </TouchableOpacity>
+          </View> : null}
         </View>
 
         <View style={styles.listSection}>
@@ -189,7 +175,7 @@ export default function LocationsScreen() {
 
         <View style={styles.mapNotice}>
           <IconSymbol name="map.fill" size={18} color="#9A7164" />
-          <Text style={styles.mapNoticeText}>地图模式准备中，当前可以按实际距离浏览北京机位，点击任一地点查看拍摄方法。</Text>
+          <Text style={styles.mapNoticeText}>点位分为原始照片坐标与地点参考；参考地点不代表原照的精确机位。没有点位的场景可在列表中浏览。</Text>
         </View>
       </ScrollView>
     </View>
@@ -197,6 +183,11 @@ export default function LocationsScreen() {
 }
 
 const styles = StyleSheet.create({
+  mapActions: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  mapActionPrimary: { flex: 1, backgroundColor: '#D85331', paddingVertical: 13, alignItems: 'center', borderRadius: 12 },
+  mapActionPrimaryText: { color: '#FFF', fontWeight: '700', fontSize: 12 },
+  mapAction: { flex: 1, backgroundColor: '#F7EDE5', paddingVertical: 13, alignItems: 'center', borderRadius: 12 },
+  mapActionText: { color: '#AC4D33', fontWeight: '700', fontSize: 12 },
   container: { flex: 1, backgroundColor: '#FFFDFC' },
   header: { paddingHorizontal: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   eyebrow: { color: '#D85331', fontSize: 11, fontWeight: '900', letterSpacing: 1 },

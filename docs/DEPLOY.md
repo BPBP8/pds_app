@@ -2,14 +2,14 @@
 
 ## 当前状态
 
-前端具备静态网页构建和 GitHub Pages 工作流。代码准备完成不等于已上线：发布者仍需将本次改动推送到 BPBP8/pds_app，并在仓库中启用 Pages。不要把本地开发快照作为新历史强制推送到原仓库。
+前端已发布至 [GitHub Pages](https://bpbp8.github.io/pds_app/)，仓库已启用 Actions 发布方式。下方步骤供后续维护使用；更新应基于原仓库 master 提交，保留历史。
 
 ## GitHub Pages
 
 1. 将改动基于原仓库的 master 提交，保留原有历史与文件。
 2. 在仓库设置中打开 Settings → Pages → Build and deployment，将 Source 设为 GitHub Actions。
 3. 推送 master，或手动运行 Check and publish web app 工作流。工作流会安装依赖、检查类型与 lint、运行产品规则测试、构建网页，然后发布。
-4. 部署成功后核对 https://bpbp8.github.io/pds_app/ 。验证首页、地图、引导、器材与刷新后的深链接，再在 README 顶部加入在线体验链接。
+4. 部署成功后核对 https://bpbp8.github.io/pds_app/ 。验证首页、地图、引导、器材与刷新后的深链接，确保 README 顶部的在线体验链接保持有效。
 
 项目设置了 /pds_app 路径前缀，使用单页输出。工作流将首页复制为 404.html，使直接打开作品与引导页面时也能加载应用；GitHub 对不存在的静态路径仍可能返回 HTTP 404。
 

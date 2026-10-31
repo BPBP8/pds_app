@@ -87,35 +87,6 @@ const normalizeRemotePost = (value: unknown): PostData | null => {
   };
 };
 
-const MOCK_POSTS: Record<string, PostData> = {
-  mock1: {
-    imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=1000&auto=format&fit=crop',
-    title: '霓虹夜色',
-    authorName: '北京拍照练习生',
-    likes: 1240,
-    category: '色彩练习',
-    notes: '在霓虹灯下寻找干净的色彩对比。',
-    device: 'Sony A7R IV',
-    capturedAt: '2026:03:23 20:15',
-    params: { lens: '35mm f/1.4', aperture: 'f/1.4', shutter: '1/60s', iso: '800' },
-  },
-  mock2: {
-    imageUrl: 'https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=1000&auto=format&fit=crop',
-    title: '流动的颜色',
-    authorName: 'Visionary',
-    likes: 382,
-    category: '影调探索',
-    device: 'Fujifilm X-T4',
-  },
-  mock3: {
-    imageUrl: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?q=80&w=1000&auto=format&fit=crop',
-    title: '几何与秩序',
-    authorName: 'ColorPop',
-    likes: 89,
-    category: '构图练习',
-  },
-};
-
 const PARAM_LABELS: Record<string, string> = {
   lens: '镜头',
   focalLength: '焦距',
@@ -162,10 +133,10 @@ export default function PostDetailScreen() {
           setPost(normalized);
           setIsRemotePost(Boolean(normalized));
         } else {
-          setPost(MOCK_POSTS[postId] ?? null);
+          setPost(null);
         }
       } catch {
-        if (active) setPost(MOCK_POSTS[postId] ?? null);
+        if (active) setPost(null);
       } finally {
         if (active) setLoading(false);
       }

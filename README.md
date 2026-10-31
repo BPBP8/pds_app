@@ -8,7 +8,7 @@
 
 > 网页已发布，可免登录体验地图、拍摄引导与器材原始样片。注册、发布与收藏保留原 Firebase 服务，当前连接与写入尚未验证。
 
-[产品思路与体验路径](docs/PRODUCT.md) · [本地预览与发布说明](docs/DEPLOY.md) · [验证记录与截图](docs/VERIFICATION.md)
+[产品思路与体验路径](docs/PRODUCT.md) · [本地预览与发布说明](docs/DEPLOY.md)
 
 ## 三个问题，三个入口
 
@@ -37,6 +37,21 @@ node scripts/static-preview.cjs dist 8766
 ```bash
 npm run check
 npm run test:product
+```
+
+## 项目目录
+
+```text
+app/              页面与导航
+components/       共用界面、地图与拍摄组件
+src/              拍摄规则、示例数据、账号与收藏逻辑
+assets/images/    在用图片、品牌图标与素材署名
+scripts/          本地预览工具
+tests/            产品规则测试
+docs/             产品说明、界面截图与发布说明
+.github/workflows/ 自动检查和网页发布
+vendor/           第三方许可
+app.config.ts     统一的应用与平台配置
 ```
 
 ## 技术与边界

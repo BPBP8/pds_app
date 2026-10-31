@@ -47,3 +47,19 @@ Web 地图使用 Leaflet 与 OpenStreetMap France 的 HOT 公共底图，无需�
 - [Leaflet 文档](https://leafletjs.com/examples/quick-start/)
 - [Expo 网页发布](https://docs.expo.dev/guides/publishing-websites/)
 - [GitHub Pages 发布源](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
+
+## 验证与维护
+
+提交前执行：
+
+```bash
+npm run check
+npm run test:product
+npm run build:web
+```
+
+7 项产品规则测试覆盖坐标与导航降级、设备与场景指导、照片参数及样片来源。GitHub Actions 会重新执行检查和构建，通过后自动发布。
+
+浏览器回归顺序：首页 → 地图选点 → 分步引导与照片对照 → 设备和光线切换 → 器材原始样片。还应检查游客发布拦截、部署前缀下的图片与深链接刷新，以及移动与桌面布局。
+
+线上前端已验证；真实账号与数据写入仍受上方“现有服务”中的限制，不能由前端检查替代。Android/iOS 真机与安装包未验证。

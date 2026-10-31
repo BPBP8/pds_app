@@ -1,12 +1,85 @@
-import type { ConfigContext, ExpoConfig } from 'expo/config';
+import type { ExpoConfig } from 'expo/config';
 
-export default ({ config }: ConfigContext): ExpoConfig => {
+// App identity, assets and platform settings live in one place.
+const appConfig: ExpoConfig = {
+  "name": "拍点啥",
+  "slug": "pds_app",
+  "version": "1.0.1",
+  "orientation": "portrait",
+  "icon": "./assets/images/icon-pds.png",
+  "scheme": "pdsapp",
+  "userInterfaceStyle": "automatic",
+  "newArchEnabled": true,
+  "ios": {
+    "supportsTablet": true,
+    "bundleIdentifier": "com.bpbp8.pdsapp",
+    "buildNumber": "1"
+  },
+  "android": {
+    "adaptiveIcon": {
+      "backgroundColor": "#D85331",
+      "foregroundImage": "./assets/images/android-icon-pds.png"
+    },
+    "edgeToEdgeEnabled": true,
+    "predictiveBackGestureEnabled": false,
+    "package": "com.bpbp8.pdsapp",
+    "versionCode": 2,
+    "permissions": [
+      "android.permission.ACCESS_COARSE_LOCATION",
+      "android.permission.ACCESS_FINE_LOCATION"
+    ]
+  },
+  "web": {
+    "output": "single",
+    "favicon": "./assets/images/icon-pds.png"
+  },
+  "plugins": [
+    "expo-router",
+    [
+      "expo-image-picker",
+      {
+        "photosPermission": "允许拍点啥读取你选择的照片，用于发布单图作品。",
+        "cameraPermission": "允许拍点啥使用相机拍摄并发布作品。",
+        "microphonePermission": false
+      }
+    ],
+    [
+      "expo-location",
+      {
+        "locationWhenInUsePermission": "允许拍点啥使用你的位置，仅用于计算作品距离和附近推荐。"
+      }
+    ],
+    [
+      "expo-splash-screen",
+      {
+        "image": "./assets/images/splash-icon-pds.png",
+        "imageWidth": 200,
+        "resizeMode": "contain",
+        "backgroundColor": "#F4F1EC",
+        "dark": {
+          "backgroundColor": "#F4F1EC"
+        }
+      }
+    ],
+    "expo-font"
+  ],
+  "experiments": {
+    "typedRoutes": true,
+    "reactCompiler": true
+  },
+  "extra": {
+    "router": {},
+    "eas": {
+      "projectId": "55da1ad8-b160-4d48-b171-f14d26085701"
+    }
+  },
+  "owner": "1500193741"
+};
+
+export default (): ExpoConfig => {
   const baseUrl = process.env.EXPO_PUBLIC_BASE_PATH?.trim();
   return {
-    ...config,
-    name: config.name ?? '拍点啥',
-    slug: config.slug ?? 'pds_app',
-    web: { ...config.web, output: 'single' },
-    experiments: { ...config.experiments, ...(baseUrl ? { baseUrl } : {}) },
+    ...appConfig,
+    experiments: { ...appConfig.experiments, ...(baseUrl ? { baseUrl } : {}) },
   };
 };

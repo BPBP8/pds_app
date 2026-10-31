@@ -6,8 +6,6 @@ import { BlurView } from 'expo-blur';
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 
-
-
 export default function TabLayout() {
   return (
     <Tabs
@@ -27,7 +25,7 @@ export default function TabLayout() {
           paddingBottom: 16,
           paddingTop: 12,
         },
-        tabBarBackground: () => 
+        tabBarBackground: () =>
           Platform.OS === 'ios' ? (
             <BlurView intensity={85} tint="light" style={StyleSheet.absoluteFill} />
           ) : null,
@@ -41,16 +39,6 @@ export default function TabLayout() {
         }}
       />
 
-      <Tabs.Screen name="inspire" options={{ href: null }} />
-      
-      {/* Hide the un-designed new-post feature from the tab bar */}
-      <Tabs.Screen
-        name="new-post"
-        options={{
-          href: null,
-        }}
-      />
-
       <Tabs.Screen
         name="guides"
         options={{
@@ -59,7 +47,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <IconSymbol size={27} name="camera.fill" color={color} />,
         }}
       />
-      
+
       <Tabs.Screen
         name="locations"
         options={{
@@ -69,15 +57,7 @@ export default function TabLayout() {
         }}
       />
 
-      {/* Hide tutorials from tab bar - accessed via Inspire tab */}
-      <Tabs.Screen
-        name="tutorials"
-        options={{
-          href: null,
-        }}
-      />
-
-      {/* Hide questions from tab bar - accessed via Guides tab */}
+      {/* Questions open from the equipment and profile pages. */}
       <Tabs.Screen
         name="questions"
         options={{
